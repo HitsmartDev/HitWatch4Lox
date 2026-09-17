@@ -41,11 +41,20 @@ case "$ACTION" in
         exit 127
         ;;
     reboot)
-        # Asynchron auslösen – der aufrufende Python-Daemon soll den State vor dem
-        # eigentlichen Neustart bereits persistiert haben. Kurze Verzögerung gibt
-        # dem Daemon Zeit, sauber zu beenden bzw. den letzten Log-Eintrag zu schreiben.
-        (sleep 3 && /sbin/reboot) &
-        exit 0
+        # WICHTIG: NICHT als Hintergrundjob "(sleep N && reboot) &" auslösen! Auf einem
+        # systemd-System kann pam_systemd beim Beenden der sudo-Session (also sobald dieses
+        # Skript zurückkehrt) alle Prozesse der Session inkl. verwaister Hintergrundjobs
+        # beenden, BEVOR der Sleep durchgelaufen ist – der Reboot würde dann lautlos nie
+        # ausgeführt. "systemctl reboot" ist dagegen von sich aus asynchron: es meldet die
+        # Anfrage an systemd (PID 1) und kehrt sofort zurück, der eigentliche Reboot läuft
+        # danach komplett unabhängig vom aufrufenden Prozessbaum weiter. Der aufrufende
+        # Python-Daemon persistiert den State bereits VOR diesem Aufruf – keine Wartezeit nötig.
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl reboot
+            exit $?
+        fi
+        /sbin/reboot
+        exit $?
         ;;
     *)
         echo "Verwendung: $0 {check|restart|reboot}" >&2

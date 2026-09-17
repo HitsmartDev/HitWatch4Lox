@@ -1,5 +1,5 @@
 ## 📌 Projekt-Status
-- **Version:** 0.1.0 (2026-09-17: Erstversion des Plugins gebaut – noch nicht auf LoxBerry getestet)
+- **Version:** 0.1 (2026-09-17: Erstversion des Plugins gebaut – noch nicht auf LoxBerry getestet)
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (Netbird-Watchdog) vollständig gebaut, als
   Framework von Unwetter4Lox übernommen (gleiche LoxBerry-Plugin-Konventionen: PHP-Webfrontend
   im iframe-isolierten `sl-`-Komponenten-Stil, Python-Daemon mit `RotatingFileHandler`-Logging,
@@ -92,6 +92,6 @@ nötig (kein Standort erforderlich) – `ajax.php` daher deutlich schlanker als 
 
 ## 📋 Versionshistorie
 
-- **v0.1.0 (2026-09-17):** Erstversion – vollständiges Plugin-Grundgerüst nach Spezifikation
+- **v0.1 (2026-09-17):** Erstversion – vollständiges Plugin-Grundgerüst nach Spezifikation
   gebaut (drei Funktionen, Cooldown-Schutz, Root-Helper-Sicherheitsmodell, optionale
   MQTT-Statusanzeige). Noch nicht auf echtem LoxBerry getestet, GitHub-Repo noch nicht angelegt.

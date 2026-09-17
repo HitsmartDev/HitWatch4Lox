@@ -5,7 +5,7 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
-## [0.1.0] – 2026-09-17
+## [0.1] – 2026-09-17
 
 ### Hinzugefügt – Erstversion
 - LoxBerry-Plugin mit eigener Web-UI (Status / Einstellungen / Log / Hilfe), aufgebaut auf
@@ -30,3 +30,16 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
   `DATADIR/logs/` (nicht `LOGDIR` – `log_maint.pl` löscht dort rekursiv), max. 7 Sessions,
   Enable-Marker-basierter Autostart/Watchdog-Cron, `preupgrade.sh`/`postinstall.sh`/`postroot.sh`
   Lifecycle identisch zum bewährten Unwetter4Lox-Muster.
+
+### Behoben – Geplanter Reboot (Funktion 3) löste lautlos keinen Neustart aus
+- Im ersten Testlauf (Funktion 3 aktiviert, Zeitpunkt erreicht) fand kein Reboot statt, ohne
+  Fehler im Log. Ursache: `netbird_watchdog_helper.sh` löste den Reboot bisher als
+  Hintergrundjob (`(sleep 3 && /sbin/reboot) &`) aus, damit der aufrufende Python-Daemon nicht
+  blockiert. Auf einem systemd-System kann `pam_systemd` beim Beenden der `sudo`-Session
+  (die endet, sobald das Helper-Skript zurückkehrt) verwaiste Hintergrundjobs der Session
+  mitbeenden – der Sleep lief dann nie zu Ende, der eigentliche `reboot`-Aufruf fand nie statt.
+- Fix: `systemctl reboot` statt manuellem Hintergrundjob. `systemctl reboot` ist von sich aus
+  asynchron – es meldet die Anfrage an systemd (PID 1) und kehrt sofort zurück; der eigentliche
+  Neustart läuft danach unabhängig vom aufrufenden Prozessbaum. Fallback auf `/sbin/reboot`
+  bleibt für Non-systemd-Systeme erhalten. Zusätzlich loggt der Daemon jetzt auch den
+  Erfolgsfall der Reboot-Anfrage (vorher nur Fehlerfall).

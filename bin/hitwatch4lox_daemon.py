@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird-Verbindungs-Watchdog für LoxBerry"""
-DAEMON_VERSION = '0.1.0'
+DAEMON_VERSION = '0.1'
 import os, sys, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -243,9 +243,11 @@ def trigger_reboot(reason, state):
     state['last_auto_reboot_reason'] = reason
     save_state(state)
     mqtt_publish_status(state)
-    rc, out, err = run_helper('reboot', timeout=10)
+    rc, out, err = run_helper('reboot', timeout=15)
     if rc != 0:
         log.error(f'Reboot-Helper meldet Fehler (RC={rc}): {(err or out).strip()[:300]}')
+    else:
+        log.critical('Reboot-Anfrage an systemd übermittelt (RC=0) – System sollte in Kürze neu starten')
 
 def cooldown_remaining_seconds(state):
     last = state.get('last_auto_reboot_epoch', 0) or 0
