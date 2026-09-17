@@ -1,0 +1,33 @@
+#!/bin/bash
+# HitWatch4Lox uninstall – wird von LoxBerry beim Deinstallieren aufgerufen
+# REPLACELBHOMEDIR wird vom LoxBerry-Installer durch den tatsächlichen Pfad ersetzt
+
+LBHOMEDIR="REPLACELBHOMEDIR"
+PLUGIN="hitwatch4lox"
+
+echo "<INFO> HitWatch4Lox wird deinstalliert..."
+
+DAEMONSCRIPT="${LBHOMEDIR}/system/daemons/plugins/${PLUGIN}"
+if [ -x "${DAEMONSCRIPT}" ]; then
+    echo "<INFO> Daemon wird gestoppt..."
+    "${DAEMONSCRIPT}" stop 2>/dev/null || true
+    echo "<OK> Daemon gestoppt"
+fi
+pkill -f "hitwatch4lox_daemon.py" 2>/dev/null || true
+
+CROND="/etc/cron.d/${PLUGIN}"
+if [ -f "${CROND}" ]; then
+    rm -f "${CROND}"
+    echo "<OK> Cron-Jobs entfernt: ${CROND}"
+fi
+
+SUDOERS="/etc/sudoers.d/${PLUGIN}"
+if [ -f "${SUDOERS}" ]; then
+    rm -f "${SUDOERS}"
+    echo "<OK> Sudoers entfernt: ${SUDOERS}"
+fi
+
+rm -f "/tmp/${PLUGIN}_cfg_upgrade.bak"
+
+echo "<OK> HitWatch4Lox Deinstallation abgeschlossen"
+exit 0

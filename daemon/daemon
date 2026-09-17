@@ -1,0 +1,82 @@
+#!/bin/bash
+# HitWatch4Lox – Daemon-Control-Script
+# WICHTIG: REPLACELBHOMEDIR und REPLACELBPPLUGINDIR werden vom LoxBerry-Installer
+# bei der Installation durch die tatsächlichen Pfade ersetzt (keine Hardcodes nötig)
+
+LBHOMEDIR="REPLACELBHOMEDIR"
+LBPPLUGINDIR="REPLACELBPPLUGINDIR"
+PYTHON=$(which python3)
+DAEMON="${LBHOMEDIR}/bin/plugins/${LBPPLUGINDIR}/hitwatch4lox_daemon.py"
+PIDFILE="${LBHOMEDIR}/log/plugins/${LBPPLUGINDIR}/daemon.pid"
+LOGDIR="${LBHOMEDIR}/log/plugins/${LBPPLUGINDIR}"
+DATADIR="${LBHOMEDIR}/data/plugins/${LBPPLUGINDIR}"
+# Enable-Marker: existiert = "Plugin soll laufen". @reboot / täglicher Restart / Watchdog
+# starten den Daemon NUR wenn diese Datei da ist. 'stop' entfernt sie (expliziter
+# User-Stop), 'start' legt sie wieder an. 'restart' (und _stop_all) fassen sie NICHT an.
+ENABLEFILE="${DATADIR}/daemon.enabled"
+
+export LBHOMEDIR LBPPLUGINDIR
+
+_stop_all() {
+    if [ -f "$PIDFILE" ]; then
+        PID=$(cat "$PIDFILE")
+        if kill -0 "$PID" 2>/dev/null; then
+            kill "$PID" 2>/dev/null
+            sleep 2
+            kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null || true
+        fi
+        rm -f "$PIDFILE"
+    fi
+    pkill -f "hitwatch4lox_daemon.py" 2>/dev/null || true
+    sleep 1
+}
+
+case "$1" in
+    start)
+        if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+            echo "Daemon laeuft bereits (PID $(cat $PIDFILE))"
+            exit 0
+        fi
+        pkill -f "hitwatch4lox_daemon.py" 2>/dev/null || true
+        sleep 1
+
+        mkdir -p "${LOGDIR}"
+        chown loxberry:loxberry "${LOGDIR}" 2>/dev/null || true
+        rm -f "$PIDFILE"
+        # Python immer als loxberry-User starten, auch wenn Daemon-Script via sudo als
+        # root läuft (Web-UI ruft sudo daemon start auf) – sonst könnte ein späterer
+        # loxberry-Kill (Cron/Watchdog) den root-Prozess nicht beenden.
+        if [ "$(id -u)" -eq 0 ] && command -v runuser >/dev/null 2>&1; then
+            runuser -u loxberry -- nohup $PYTHON "$DAEMON" > /dev/null 2>&1 &
+        else
+            nohup $PYTHON "$DAEMON" > /dev/null 2>&1 &
+        fi
+        echo $! > "$PIDFILE"
+        mkdir -p "${DATADIR}"
+        touch "${ENABLEFILE}" 2>/dev/null
+        chown loxberry:loxberry "${ENABLEFILE}" "${DATADIR}" 2>/dev/null || true
+        echo "HitWatch4Lox gestartet (PID $!)"
+        ;;
+    stop)
+        rm -f "${ENABLEFILE}"
+        _stop_all
+        echo "gestoppt"
+        ;;
+    restart)
+        _stop_all
+        sleep 1
+        $0 start
+        ;;
+    status)
+        if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+            echo "running"
+        else
+            echo "stopped"
+        fi
+        ;;
+    *)
+        echo "Verwendung: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+exit 0

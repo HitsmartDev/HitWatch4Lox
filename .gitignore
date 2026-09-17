@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Build-Output (lokal erzeugt, Release-ZIP kommt via GitHub Actions)
+*.zip
+*.lbplugin
+_stage/
+
+# Entwickler-Kontext
+# CLAUDE.md / gemini.md / AGENTS.md werden bewusst mit ins Repo genommen (Projekt-/Sync-Kontext)
+aimemory.md
+
+# Laufzeit-Dateien (LoxBerry)
+data/
+log/
+logs/
+issue-*.md
+issue-*.png
+
+# IDE / OS
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.code-workspace
+
+# Lokale Konfiguration (nie ins Repo)
+config/hitwatch4lox.cfg
+
+# Interne Entwickler-Hilfsdateien
+create-plugin-zip.sh
+.playwright-mcp/

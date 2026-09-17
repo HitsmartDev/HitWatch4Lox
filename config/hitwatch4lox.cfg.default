@@ -1,0 +1,30 @@
+[WATCHDOG]
+# Funktion 1: Netbird-Dienst-Watchdog – prüft periodisch ob Netbird tatsächlich
+# verbunden ist (nicht nur ob der Dienst läuft) und startet ihn bei Bedarf einmalig neu.
+ENABLED=1
+CHECK_INTERVAL=300
+RESTART_WAIT_SECONDS=20
+
+[REBOOT_ESCALATION]
+# Funktion 2: Nur wirksam wenn WATCHDOG.ENABLED=1. Wenn Netbird auch nach dem
+# Dienst-Neustart nicht verbunden ist, wird einmalig ein Reboot ausgelöst
+# (Cooldown siehe COOLDOWN_HOURS – verhindert Boot-Loops bei externen Ursachen).
+ENABLED=0
+COOLDOWN_HOURS=6
+
+[WEEKLY_REBOOT]
+# Funktion 3: Unabhängiger, geplanter Wartungsneustart. WEEKDAY: 1=Montag ... 7=Sonntag.
+ENABLED=0
+WEEKDAY=7
+TIME=04:00
+
+[MQTT]
+# Optionale Statusveröffentlichung an Loxone (Verbindungsstatus, letzte Aktionen).
+# Rein informativ – die Watchdog-Logik selbst ist von MQTT vollständig unabhängig.
+ENABLED=1
+USE_LOXBERRY_MQTT=1
+BROKER=127.0.0.1
+PORT=1883
+USER=
+PASS=
+TOPIC_PREFIX=HitWatch/netbird_watchdog

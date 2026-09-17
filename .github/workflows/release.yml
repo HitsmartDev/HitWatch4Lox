@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Version aus plugin.cfg lesen
+        id: version
+        run: |
+          VERSION=$(grep "^VERSION=" plugin.cfg | head -1 | cut -d= -f2 | tr -d ' ')
+          PLUGIN=$(grep "^NAME=" plugin.cfg | head -1 | cut -d= -f2 | tr -d ' ')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "plugin=$PLUGIN" >> $GITHUB_OUTPUT
+          echo "zipname=${PLUGIN}-${VERSION}.zip" >> $GITHUB_OUTPUT
+
+      - name: zip installieren
+        run: sudo apt-get install -y zip
+
+      - name: Plugin ZIP erstellen
+        run: |
+          # Ausgabe-Dateiname ohne "-snapshot" Suffix für offizielle Releases
+          PLUGIN=${{ steps.version.outputs.plugin }}
+          VERSION=${{ steps.version.outputs.version }}
+          ZIPNAME="${PLUGIN}-${VERSION}.zip"
+
+          STAGEDIR=$(mktemp -d)
+          PLUGINDIR="${STAGEDIR}/${PLUGIN}"
+          mkdir -p "$PLUGINDIR"
+
+          for item in CHANGELOG.md README.md plugin.cfg preinstall.sh postinstall.sh postroot.sh preupgrade.sh apt bin config daemon icons templates uninstall webfrontend; do
+            [ -e "$item" ] && cp -r "$item" "$PLUGINDIR/"
+          done
+
+          # Shell-Scripts und Daemon ausführbar machen
+          find "$PLUGINDIR" -name "*.sh" -exec chmod +x {} \;
+          [ -f "$PLUGINDIR/daemon/daemon" ]        && chmod +x "$PLUGINDIR/daemon/daemon"
+          [ -f "$PLUGINDIR/uninstall/uninstall" ]  && chmod +x "$PLUGINDIR/uninstall/uninstall"
+          [ -f "$PLUGINDIR/bin/hitwatch4lox_daemon.py" ] && chmod +x "$PLUGINDIR/bin/hitwatch4lox_daemon.py"
+
+          cd "$STAGEDIR"
+          zip -r "$GITHUB_WORKSPACE/$ZIPNAME" "$PLUGIN/" -x "*/__pycache__/*" -x "*.pyc"
+          echo "ZIPNAME=$ZIPNAME" >> $GITHUB_ENV
+
+      - name: GitHub Release erstellen und ZIP anhängen
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "HitWatch4Lox ${{ steps.version.outputs.version }}"
+          body: |
+            ## HitWatch4Lox ${{ steps.version.outputs.version }}
+
+            ### Installation
+            1. ZIP-Datei herunterladen
+            2. In LoxBerry: **Plugin Manager → ZIP-Datei installieren**
+
+            ### Änderungen
+            Siehe [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/master/CHANGELOG.md)
+          files: ${{ env.ZIPNAME }}
+          draft: false
+          prerelease: false
