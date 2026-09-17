@@ -218,6 +218,38 @@ body.sl-embed {
 .sl-toggle input:disabled + .sl-toggle-slider { opacity: 0.5; cursor: not-allowed; }
 .sl-toggle-label { font-size: 0.82rem; font-weight: 600; }
 
+/* ── Wochentag-Chips (Mehrfachauswahl) ── */
+.sl-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.4rem;
+  margin: 0.5rem 0 0.3rem;
+}
+.sl-chip { position: relative; cursor: pointer; user-select: none; }
+.sl-chip input[type=checkbox] { position: absolute; opacity: 0; width: 0; height: 0; }
+.sl-chip span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0.42rem 0.2rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 2px solid var(--border);
+  background: #f4f6f9;
+  color: var(--muted);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  text-align: center;
+}
+.sl-chip input:checked + span {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: #fff;
+}
+@media (max-width: 600px) {
+  .sl-chip-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
 /* ── Slider-Zeilen ── */
 .sl-slider-row { margin: 0.6rem 0 0.25rem; }
 .sl-slider-row label { display: block; font-size: 0.82rem; margin-bottom: 0.2rem; }

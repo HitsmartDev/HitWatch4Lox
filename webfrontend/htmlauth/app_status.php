@@ -15,12 +15,13 @@ if (file_exists($sf)) $state = json_decode(file_get_contents($sf), true) ?? [];
 $cfg = parse_ini_file($lbpconfigdir . '/hitwatch4lox.cfg', true) ?: [];
 $f1_enabled = ($cfg['WATCHDOG']['ENABLED'] ?? '1') == '1';
 $f2_enabled = $f1_enabled && ($cfg['REBOOT_ESCALATION']['ENABLED'] ?? '0') == '1';
-$f3_enabled = ($cfg['WEEKLY_REBOOT']['ENABLED'] ?? '0') == '1';
+$f3_enabled = ($cfg['SCHEDULED_REBOOT']['ENABLED'] ?? '0') == '1';
 $check_interval = (int)($cfg['WATCHDOG']['CHECK_INTERVAL'] ?? 300);
 $cooldown_hours  = (int)($cfg['REBOOT_ESCALATION']['COOLDOWN_HOURS'] ?? 6);
 $weekday_names = [1=>'Montag',2=>'Dienstag',3=>'Mittwoch',4=>'Donnerstag',5=>'Freitag',6=>'Samstag',7=>'Sonntag'];
-$f3_weekday = (int)($cfg['WEEKLY_REBOOT']['WEEKDAY'] ?? 7);
-$f3_time    = $cfg['WEEKLY_REBOOT']['TIME'] ?? '04:00';
+$f3_weekdays = array_filter(array_map('trim', explode(',', $cfg['SCHEDULED_REBOOT']['WEEKDAYS'] ?? '7')));
+$f3_time    = $cfg['SCHEDULED_REBOOT']['TIME'] ?? '04:00';
+$f3_every_n = (int)($cfg['SCHEDULED_REBOOT']['EVERY_N'] ?? 1);
 
 // ── Daemon-Status (PID-Check + Prozessname) ──
 $pidfile        = $lbplogdir . '/daemon.pid';
@@ -97,7 +98,7 @@ $is_stale = ($f1_enabled && $daemon_running && $last_check_epoch > 0 && $age > (
 
 $reason_labels = [
     'netbird_watchdog' => 'Netbird-Watchdog (Funktion 2)',
-    'weekly_scheduled' => 'Geplanter Wartungsneustart (Funktion 3)',
+    'scheduled_reboot' => 'Automatischer Reboot (Funktion 3)',
 ];
 
 render_header('app_status');
@@ -184,11 +185,14 @@ render_header('app_status');
             </div>
             <div class="sl-stat">
                 <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f3_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f3_enabled ? 'An' : 'Aus' ?></div>
-                <div class="sl-stat-lbl">F3 – Wöchentlicher Reboot</div>
+                <div class="sl-stat-lbl">F3 – Automatischer Reboot</div>
             </div>
         </div>
-        <?php if ($f3_enabled): ?>
-        <p class="sl-hint">Geplanter Wartungsneustart: jeden <b><?= h($weekday_names[$f3_weekday] ?? '?') ?></b> um <b><?= h($f3_time) ?></b> Uhr.</p>
+        <?php if ($f3_enabled):
+            $f3_day_labels = array_map(fn($w) => $weekday_names[(int)$w] ?? '?', $f3_weekdays);
+        ?>
+        <p class="sl-hint">Automatischer Reboot: <b><?= h(implode(', ', $f3_day_labels)) ?></b> um <b><?= h($f3_time) ?></b> Uhr
+            (<?= $f3_every_n <= 1 ? 'jedes Mal' : 'nur alle ' . $f3_every_n . 'x' ?>).</p>
         <?php endif; ?>
         <a href="app_settings.php" class="sl-btn secondary sm">⚙️ Zu den Einstellungen</a>
     </div>

@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird-Verbindungs-Watchdog für LoxBerry"""
-DAEMON_VERSION = '0.1'
+DAEMON_VERSION = '0.3'
 import os, sys, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -116,14 +116,24 @@ RESTART_WAIT     = max(5, min(120, int(get_cfg('WATCHDOG', 'RESTART_WAIT_SECONDS
 F2_ENABLED       = F1_ENABLED and get_cfg('REBOOT_ESCALATION', 'ENABLED', '0') == '1'
 COOLDOWN_HOURS   = max(1, min(72, int(get_cfg('REBOOT_ESCALATION', 'COOLDOWN_HOURS', '6'))))
 
-F3_ENABLED       = get_cfg('WEEKLY_REBOOT', 'ENABLED', '0') == '1'
-F3_WEEKDAY       = max(1, min(7, int(get_cfg('WEEKLY_REBOOT', 'WEEKDAY', '7'))))  # 1=Mo .. 7=So (ISO)
-F3_TIME          = get_cfg('WEEKLY_REBOOT', 'TIME', '04:00')
+F3_ENABLED       = get_cfg('SCHEDULED_REBOOT', 'ENABLED', '0') == '1'
+_F3_WEEKDAYS_RAW = get_cfg('SCHEDULED_REBOOT', 'WEEKDAYS', '7')
+F3_WEEKDAYS: set = set()
+for _w in _F3_WEEKDAYS_RAW.split(','):
+    _w = _w.strip()
+    if _w.isdigit() and 1 <= int(_w) <= 7:
+        F3_WEEKDAYS.add(int(_w))  # 1=Mo .. 7=So (ISO)
+if not F3_WEEKDAYS:
+    F3_WEEKDAYS = {7}
+F3_TIME = get_cfg('SCHEDULED_REBOOT', 'TIME', '04:00')
 try:
     _F3_H, _F3_M = [int(x) for x in F3_TIME.split(':', 1)]
 except Exception:
     _F3_H, _F3_M = 4, 0
-    log.warning(f'WEEKLY_REBOOT.TIME ungültig ({F3_TIME!r}) – Fallback 04:00')
+    log.warning(f'SCHEDULED_REBOOT.TIME ungültig ({F3_TIME!r}) – Fallback 04:00')
+# Frequenz gilt unabhängig je ausgewähltem Wochentag: 1=jedes Mal, 2=nur jedes 2. Mal an
+# diesem Wochentag, usw. – jeder Wochentag hat seinen eigenen Zähler (state.json).
+F3_EVERY_N = max(1, min(52, int(get_cfg('SCHEDULED_REBOOT', 'EVERY_N', '1'))))
 
 MQTT_ENABLED       = get_cfg('MQTT', 'ENABLED', '1') == '1'
 MQTT_USE_LB        = get_cfg('MQTT', 'USE_LOXBERRY_MQTT', '1') == '1'
@@ -133,10 +143,12 @@ MQTT_USER          = get_cfg('MQTT', 'USER', '')
 MQTT_PASS          = get_cfg('MQTT', 'PASS', '')
 TOPIC_PREFIX        = get_cfg('MQTT', 'TOPIC_PREFIX', 'HitWatch/netbird_watchdog')
 
+_f3_weekdays_str = ','.join(str(w) for w in sorted(F3_WEEKDAYS))
 log.info(
     f'Konfiguration: F1(Watchdog)={"an" if F1_ENABLED else "aus"} (Intervall {CHECK_INTERVAL}s) | '
     f'F2(Reboot-Eskalation)={"an" if F2_ENABLED else "aus"} (Cooldown {COOLDOWN_HOURS}h) | '
-    f'F3(Wöchentlicher Reboot)={"an" if F3_ENABLED else "aus"} (Tag {F3_WEEKDAY} um {F3_TIME}) | '
+    f'F3(Automatischer Reboot)={"an" if F3_ENABLED else "aus"} '
+    f'(Tage {_f3_weekdays_str} um {F3_TIME}, alle {F3_EVERY_N}x) | '
     f'MQTT={"an" if MQTT_ENABLED else "aus"}'
 )
 
@@ -421,29 +433,53 @@ def run():
                         log.info('Netbird wieder verbunden')
                     _prev_connected = True
 
-            # ---------------- Funktion 3: Geplanter wöchentlicher Reboot ----------------
+            # ---------------- Funktion 3: Automatischer Reboot (mehrere Wochentage + Frequenz) ----------------
             if F3_ENABLED:
                 _now_dt = datetime.now()
-                today_str = _now_dt.strftime('%Y-%m-%d')
-                scheduled_today = (
-                    _now_dt.isoweekday() == F3_WEEKDAY
-                    and (_now_dt.hour, _now_dt.minute) >= (_F3_H, _F3_M)
-                    and state.get('last_weekly_reboot_date') != today_str
-                )
-                if scheduled_today:
-                    remaining = cooldown_remaining_seconds(state)
-                    state['last_weekly_reboot_date'] = today_str
-                    if remaining > 0:
+                _today_iso = _now_dt.isoweekday()  # 1=Mo .. 7=So
+                if _today_iso in F3_WEEKDAYS:
+                    today_str = _now_dt.strftime('%Y-%m-%d')
+                    _already_handled_today = state.get('last_scheduled_reboot_date') == today_str
+                    _scheduled_dt = _now_dt.replace(hour=_F3_H, minute=_F3_M, second=0, microsecond=0)
+                    _since_scheduled = (_now_dt - _scheduled_dt).total_seconds()
+                    # Fangfenster statt offener "irgendwann nach HH:MM"-Prüfung: verhindert dass ein
+                    # (Neu-)Start des Daemons Stunden nach dem geplanten Zeitpunkt (z.B. nach einer
+                    # Neuinstallation, die state.json zurücksetzt, oder nach einem Absturz) einen
+                    # längst überfälligen Reboot nachträglich auslöst. Verpasste Fenster werden
+                    # einfach übersprungen – nächster Versuch ist erst wieder am nächsten passenden
+                    # Wochentag. Der Frequenz-Zähler wird bei einem verpassten Fenster NICHT erhöht,
+                    # damit ein Ausfall die "jedes 2./3./4. Mal"-Zählung nicht verschiebt.
+                    _catch_window_s = max(600, CHECK_INTERVAL * 2)
+                    if not _already_handled_today and 0 <= _since_scheduled < _catch_window_s:
+                        state['last_scheduled_reboot_date'] = today_str
+                        counters = state.setdefault('reboot_weekday_counters', {})
+                        wd_key = str(_today_iso)
+                        count = int(counters.get(wd_key, 0)) + 1
+                        counters[wd_key] = count
+                        if count % F3_EVERY_N != 0:
+                            log.info(
+                                f'Automatischer Reboot an diesem Wochentag übersprungen '
+                                f'(Zyklus {count}/{F3_EVERY_N}, Frequenz alle {F3_EVERY_N}x)'
+                            )
+                        else:
+                            remaining = cooldown_remaining_seconds(state)
+                            if remaining > 0:
+                                log.warning(
+                                    f'Automatischer Reboot fällig (Zyklus {count}/{F3_EVERY_N}), aber Cooldown '
+                                    f"aktiv – noch {remaining/3600:.1f}h (letzter Auto-Reboot: "
+                                    f"{state.get('last_auto_reboot', '–')}, Grund: {state.get('last_auto_reboot_reason', '–')})"
+                                )
+                            else:
+                                trigger_reboot('scheduled_reboot', state)
+                                save_state(state)
+                                return
+                    elif not _already_handled_today and _since_scheduled >= _catch_window_s:
+                        state['last_scheduled_reboot_date'] = today_str
                         log.warning(
-                            f'Wöchentlicher Reboot fällig, aber Cooldown aktiv – noch {remaining/3600:.1f}h '
-                            f"(letzter Auto-Reboot: {state.get('last_auto_reboot', '–')}, "
-                            f'Grund: {state.get("last_auto_reboot_reason", "–")})'
+                            f'Automatischer Reboot verpasst (Fenster {_catch_window_s/60:.0f} min nach '
+                            f'{F3_TIME} bereits abgelaufen) – wird an diesem Wochentag nicht nachgeholt, '
+                            f'Frequenz-Zähler bleibt unverändert.'
                         )
-                        save_state(state)
-                    else:
-                        trigger_reboot('weekly_scheduled', state)
-                        save_state(state)
-                        return
 
             # ---------------- Heartbeat / Persistenz ----------------
             if now - _last_heartbeat > HEARTBEAT_SECONDS:

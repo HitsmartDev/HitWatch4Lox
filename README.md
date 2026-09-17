@@ -38,11 +38,15 @@ Neustart-Schleife zu verfangen.
 - Ist die Verbindung nach dem Dienst-Neustart weiterhin nicht da: einmaliger Reboot des LoxBerry
 - Getrennt von Funktion 1 ein-/ausschaltbar – nicht jeder Standort soll automatisch neu gebootet werden
 
-### 3. Geplanter wöchentlicher Reboot
+### 3. Automatischer Reboot
 
-- Eigener, frei einstellbarer Wochentag + Uhrzeit
-- Komplett unabhängige Eskalationslogik – läuft auch wenn Funktion 1/2 deaktiviert sind
+- Frei wählbare Wochentage (Mehrfachauswahl) + gemeinsame Uhrzeit
+- Frequenz einstellbar: jedes Mal oder nur jedes 2./3./4.… Mal – **pro Wochentag unabhängig
+  gezählt** (z.B. Mo+Do bei "alle 2x" → jeder 2. Montag *und* jeder 2. Donnerstag, unabhängig)
+- Komplett unabhängige Logik – läuft auch wenn Funktion 1/2 deaktiviert sind
 - Reiner Wartungsneustart, unabhängig vom Netbird-Status
+- Fangfenster (2× Prüfintervall, mind. 10 min): war der Daemon zum geplanten Zeitpunkt nicht
+  aktiv, wird der Reboot an diesem Tag nicht nachträglich nachgeholt
 
 ### Schutz vor Boot-Loops (Cooldown)
 

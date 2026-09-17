@@ -24,11 +24,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $mqtt_en = isset($_POST['mqtt_enabled']) ? '1' : '0';
         $use_lb_new = isset($_POST['use_lb_mqtt']) ? '1' : '0';
 
-        $weekday = max(1, min(7, intval($_POST['f3_weekday'] ?? 7)));
+        // Mehrere Wochentage: Checkboxen f3_weekday_1..f3_weekday_7 (ISO: 1=Mo .. 7=So)
+        $weekdays = [];
+        for ($i = 1; $i <= 7; $i++) {
+            if (isset($_POST["f3_weekday_{$i}"])) $weekdays[] = $i;
+        }
+        if (empty($weekdays)) $weekdays = [7];
+        $weekdays_str = implode(',', $weekdays);
+
         $time_raw = trim($_POST['f3_time'] ?? '04:00');
         if (!preg_match('/^([01]\d|2[0-3]):([0-5]\d)$/', $time_raw)) {
             $time_raw = '04:00';
         }
+        $every_n = max(1, min(52, intval($_POST['f3_every_n'] ?? 1)));
 
         $c  = "[WATCHDOG]\n";
         $c .= "ENABLED={$f1_en}\n";
@@ -39,10 +47,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $c .= "ENABLED={$f2_en}\n";
         $c .= 'COOLDOWN_HOURS=' . max(1, min(72, intval($_POST['cooldown_hours'] ?? 6))) . "\n\n";
 
-        $c .= "[WEEKLY_REBOOT]\n";
+        $c .= "[SCHEDULED_REBOOT]\n";
         $c .= "ENABLED={$f3_en}\n";
-        $c .= "WEEKDAY={$weekday}\n";
-        $c .= "TIME={$time_raw}\n\n";
+        $c .= "WEEKDAYS={$weekdays_str}\n";
+        $c .= "TIME={$time_raw}\n";
+        $c .= "EVERY_N={$every_n}\n\n";
 
         $c .= "[MQTT]\n";
         $c .= "ENABLED={$mqtt_en}\n";
@@ -70,8 +79,9 @@ function cv(string $s, string $k, string $d = ''): string {
 
 $f1_enabled = ($cfg['WATCHDOG']['ENABLED'] ?? '1') == '1';
 $f2_enabled = ($cfg['REBOOT_ESCALATION']['ENABLED'] ?? '0') == '1';
-$f3_enabled = ($cfg['WEEKLY_REBOOT']['ENABLED'] ?? '0') == '1';
-$weekday_names = [1=>'Montag',2=>'Dienstag',3=>'Mittwoch',4=>'Donnerstag',5=>'Freitag',6=>'Samstag',7=>'Sonntag'];
+$f3_enabled = ($cfg['SCHEDULED_REBOOT']['ENABLED'] ?? '0') == '1';
+$weekday_names = [1=>'Mo',2=>'Di',3=>'Mi',4=>'Do',5=>'Fr',6=>'Sa',7=>'So'];
+$f3_weekdays_cfg = array_map('trim', explode(',', $cfg['SCHEDULED_REBOOT']['WEEKDAYS'] ?? '7'));
 
 render_header('app_settings');
 ?>
@@ -151,10 +161,10 @@ render_header('app_settings');
 </div>
 
 <!-- ================================================================
-     FUNKTION 3 – GEPLANTER WÖCHENTLICHER REBOOT
+     FUNKTION 3 – AUTOMATISCHER REBOOT
      ================================================================ -->
 <div class="sl-card">
-    <div class="sl-card-head"><span class="sl-card-head-title">🗓️ Funktion 3 – Geplanter wöchentlicher Reboot</span></div>
+    <div class="sl-card-head"><span class="sl-card-head-title">🗓️ Funktion 3 – Automatischer Reboot</span></div>
     <div class="sl-card-body">
         <div class="sl-field">
             <div class="sl-toggle-wrap">
@@ -162,22 +172,42 @@ render_header('app_settings');
                     <input type="checkbox" name="f3_enabled" <?= $f3_enabled ? 'checked' : '' ?>>
                     <span class="sl-toggle-slider"></span>
                 </label>
-                <span class="sl-toggle-label">Wöchentlichen Wartungsneustart aktivieren</span>
+                <span class="sl-toggle-label">Automatischen Reboot aktivieren</span>
             </div>
             <p class="sl-hint">Reiner Wartungsneustart, komplett unabhängig vom Netbird-Status. Läuft auch wenn
                 Funktion 1/2 deaktiviert sind. Respektiert denselben Cooldown wie Funktion 2.</p>
         </div>
         <div class="sl-field">
-            <label for="f3_weekday">Wochentag</label>
-            <select id="f3_weekday" name="f3_weekday">
-<?php $cur_wd = (int)($cfg['WEEKLY_REBOOT']['WEEKDAY'] ?? 7); foreach ($weekday_names as $num => $name): ?>
-                <option value="<?= $num ?>" <?= $cur_wd === $num ? 'selected' : '' ?>><?= h($name) ?></option>
+            <label>Wochentage</label>
+            <div class="sl-chip-grid">
+<?php foreach ($weekday_names as $num => $name):
+    $checked = in_array((string)$num, $f3_weekdays_cfg, true);
+?>
+                <label class="sl-chip">
+                    <input type="checkbox" name="f3_weekday_<?= $num ?>" value="1" <?= $checked ? 'checked' : '' ?>>
+                    <span><?= h($name) ?></span>
+                </label>
 <?php endforeach; ?>
-            </select>
+            </div>
+            <p class="sl-hint">Alle ausgewählten Tage nutzen dieselbe Uhrzeit und Frequenz (unten) – jeder Tag
+                zählt seine eigenen Vorkommen aber unabhängig.</p>
         </div>
         <div class="sl-field">
             <label for="f3_time">Uhrzeit</label>
-            <input type="time" id="f3_time" name="f3_time" value="<?= cv('WEEKLY_REBOOT','TIME','04:00') ?>">
+            <input type="time" id="f3_time" name="f3_time" value="<?= cv('SCHEDULED_REBOOT','TIME','04:00') ?>">
+        </div>
+        <div class="sl-field">
+            <label for="f3_every_n">Frequenz</label>
+            <?php $cur_every_n = (int)($cfg['SCHEDULED_REBOOT']['EVERY_N'] ?? 1); ?>
+            <select id="f3_every_n" name="f3_every_n">
+                <option value="1" <?= $cur_every_n === 1 ? 'selected' : '' ?>>Jedes Mal</option>
+<?php for ($n = 2; $n <= 8; $n++): ?>
+                <option value="<?= $n ?>" <?= $cur_every_n === $n ? 'selected' : '' ?>>Nur alle <?= $n ?>x</option>
+<?php endfor; ?>
+            </select>
+            <p class="sl-hint">Gilt gemeinsam für alle ausgewählten Wochentage, aber jeder Wochentag zählt für
+                sich: bei "alle 2x" und Auswahl Mo+Do wird z.B. jeder 2. Montag <b>und</b> jeder 2. Donnerstag
+                übersprungen – unabhängig voneinander.</p>
         </div>
     </div>
 </div>

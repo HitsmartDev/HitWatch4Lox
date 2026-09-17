@@ -59,12 +59,23 @@ nur den Dienst neu starten lassen, aber nicht automatisch das ganze Gerät neu b
 </details>
 
 <details class="sl-details-nested">
-<summary>Funktion 3 – Geplanter wöchentlicher Reboot</summary>
+<summary>Funktion 3 – Automatischer Reboot</summary>
 <div class="sl-details-body">
-<p>Ein reiner Wartungsneustart zu einem frei wählbaren Wochentag und einer Uhrzeit – komplett
-unabhängig vom Netbird-Status. Läuft auch wenn Funktion 1/2 deaktiviert sind. Respektiert
-denselben Cooldown wie Funktion 2, damit nachvollziehbar bleibt, welcher Mechanismus einen
-Reboot ausgelöst hat (Status-Tab zeigt den Grund).</p>
+<p>Ein reiner Wartungsneustart zu frei wählbaren Wochentagen (Mehrfachauswahl) und einer
+gemeinsamen Uhrzeit – komplett unabhängig vom Netbird-Status. Läuft auch wenn Funktion 1/2
+deaktiviert sind. Respektiert denselben Cooldown wie Funktion 2, damit nachvollziehbar bleibt,
+welcher Mechanismus einen Reboot ausgelöst hat (Status-Tab zeigt den Grund).</p>
+<p><b>Frequenz:</b> "Jedes Mal" löst an jedem ausgewählten Wochentag einen Reboot aus. "Nur
+alle 2x"/"3x"/… überspringt entsprechend viele Vorkommen – und zwar <b>pro Wochentag
+unabhängig gezählt</b>. Beispiel: Montag + Donnerstag ausgewählt, Frequenz "alle 2x" →
+jeder 2. Montag <b>und</b> jeder 2. Donnerstag lösen aus, mit eigenem Zähler je Wochentag
+(gespeichert in <code>state.json</code>).</p>
+<p><b>Fangfenster statt "irgendwann heute noch":</b> Der Reboot feuert nur, wenn die Prüfung
+innerhalb weniger Minuten nach dem eingestellten Zeitpunkt läuft (Fenstergröße = 2× Prüfintervall,
+mind. 10 Minuten). War der Daemon zum geplanten Zeitpunkt nicht aktiv (z.B. weil das Plugin
+gerade neu installiert wurde oder abgestürzt war), wird der Reboot an diesem Tag <b>nicht
+nachträglich nachgeholt</b> und der Frequenz-Zähler bleibt unverändert – sonst würde jeder
+spätere Neustart des Daemons am selben Tag erneut einen überfälligen Reboot auslösen.</p>
 </div>
 </details>
 
@@ -127,7 +138,7 @@ pro Prüfzyklus erfolgt, nicht als Dauerverbindung.</p>
 <tr><td><code>last_restart_epoch</code></td><td>Unix-TS</td><td>Zeitpunkt des letzten Dienst-Neustarts</td></tr>
 <tr><td><code>restart_count_total</code></td><td>Zahl</td><td>Dienst-Neustarts seit Daemon-Start</td></tr>
 <tr><td><code>last_reboot_epoch</code></td><td>Unix-TS</td><td>Zeitpunkt des letzten automatischen Reboots</td></tr>
-<tr><td><code>last_reboot_reason</code></td><td>Text</td><td><code>netbird_watchdog</code> oder <code>weekly_scheduled</code></td></tr>
+<tr><td><code>last_reboot_reason</code></td><td>Text</td><td><code>netbird_watchdog</code> oder <code>scheduled_reboot</code></td></tr>
 <tr><td><code>cooldown_active</code></td><td>0 / 1</td><td>Reboot-Cooldown aktuell aktiv</td></tr>
 <tr><td><code>cooldown_remaining_min</code></td><td>Minuten</td><td>Verbleibende Cooldown-Zeit</td></tr>
 </tbody></table>

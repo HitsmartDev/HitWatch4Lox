@@ -12,11 +12,14 @@ RESTART_WAIT_SECONDS=20
 ENABLED=0
 COOLDOWN_HOURS=6
 
-[WEEKLY_REBOOT]
-# Funktion 3: Unabhängiger, geplanter Wartungsneustart. WEEKDAY: 1=Montag ... 7=Sonntag.
+[SCHEDULED_REBOOT]
+# Funktion 3: Unabhängiger, automatischer Wartungsneustart. WEEKDAYS: kommagetrennte Liste,
+# 1=Montag ... 7=Sonntag (z.B. "1,4" für Montag+Donnerstag). EVERY_N: gilt für JEDEN
+# ausgewählten Wochentag unabhängig – 1=jedes Mal, 2=nur jedes 2. Mal an diesem Wochentag usw.
 ENABLED=0
-WEEKDAY=7
+WEEKDAYS=7
 TIME=04:00
+EVERY_N=1
 
 [MQTT]
 # Optionale Statusveröffentlichung an Loxone (Verbindungsstatus, letzte Aktionen).

@@ -1,31 +1,50 @@
 ## 📌 Projekt-Status
-- **Version:** 0.1 (2026-09-17: Erstversion des Plugins gebaut – noch nicht auf LoxBerry getestet)
+- **Version:** 0.3 (2026-09-17: erste Testinstallation auf echtem LoxBerry durch Stefan, zwei
+  Bugs gefunden und gefixt, Funktion 3 auf Anfrage umgebaut)
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (Netbird-Watchdog) vollständig gebaut, als
   Framework von Unwetter4Lox übernommen (gleiche LoxBerry-Plugin-Konventionen: PHP-Webfrontend
   im iframe-isolierten `sl-`-Komponenten-Stil, Python-Daemon mit `RotatingFileHandler`-Logging,
   Enable-Marker-basierter Autostart/Watchdog-Cron, `preupgrade.sh`/`postinstall.sh`/`postroot.sh`-
-  Lifecycle). Enthält **nur** die drei in der Spezifikation beschriebenen Funktionen
-  (Dienst-Watchdog, Reboot-Eskalation, wöchentlicher Reboot) – der n8n-Teil (zentrale
-  Überwachung über die Netbird-API) ist bewusst **nicht** Teil dieses Repos.
+  Lifecycle). Enthält **nur** die in der Spezifikation beschriebenen Funktionen (Dienst-Watchdog,
+  Reboot-Eskalation, automatischer Reboot) – der n8n-Teil (zentrale Überwachung über die
+  Netbird-API) ist bewusst **nicht** Teil dieses Repos.
+- **Während des ersten Live-Tests gefunden und behoben:**
+  1. **Reboot-Auslösung lautlos wirkungslos (KRITISCH):** `netbird_watchdog_helper.sh` löste
+     Reboots bisher als Hintergrundjob (`(sleep 3 && /sbin/reboot) &`) aus. Auf einem
+     systemd-System kann `pam_systemd` beim Beenden der `sudo`-Session verwaiste Hintergrundjobs
+     mitbeenden, bevor der Sleep durchgelaufen ist – Reboot fand nie statt, kein Fehler im Log.
+     Fix: `systemctl reboot` (asynchron, meldet nur die Anfrage an systemd/PID 1 und kehrt sofort
+     zurück – der eigentliche Neustart läuft danach unabhängig vom aufrufenden Prozessbaum).
+  2. **Retroaktives Auslösen bei jeder Neuinstallation:** Die "heute schon erledigt"-Sperre für
+     den automatischen Reboot lebt in `state.json` (`data/plugins/hitwatch4lox/`). Eine
+     Deinstallation räumt dieses Verzeichnis weg (LoxBerry-Standardverhalten) – die Sperre war
+     dann weg. Da die alte Prüfung nur `"aktuelle Zeit >= HH:MM an Tag X"` ohne Obergrenze war,
+     galt der Reboot dann für den **Rest des Tages** als fällig → jede Neuinstallation nach der
+     geplanten Uhrzeit löste erneut einen Reboot aus. Fix: Fangfenster (2× `CHECK_INTERVAL`,
+     mind. 10 Minuten) – ein Neustart des Daemons Stunden nach dem geplanten Zeitpunkt löst
+     nichts mehr aus, das Fenster gilt dann als verpasst (kein Nachholen).
+- **Auf Anfrage umgebaut – Funktion 3 (`[WEEKLY_REBOOT]` → `[SCHEDULED_REBOOT]`):** War
+  ursprünglich EIN Wochentag + eine Uhrzeit. Jetzt: **mehrere Wochentage** (Mehrfachauswahl,
+  `WEEKDAYS=1,4` etc.) + eine gemeinsame Uhrzeit + eine **Frequenz** (`EVERY_N`, "jedes Mal" oder
+  "nur alle 2x/3x/…"), die **pro Wochentag unabhängig gezählt** wird (eigener Zähler je
+  Wochentag in `state.json['reboot_weekday_counters']`, Key = ISO-Wochentag als String).
+  UI-Bezeichnung geändert von "Geplanter wöchentlicher Reboot" auf schlicht "Automatischer
+  Reboot". `last_auto_reboot_reason` heißt jetzt `scheduled_reboot` (vorher `weekly_scheduled`).
 - **Noch offen:**
-  - [ ] GitHub-Repository `HitWatch4Lox` unter dem HitSmart-Account anlegen und pushen – in
-    dieser Session war `gh` nicht authentifiziert (`gh auth login` erforderlich), daher lokal
-    nur committet, noch nicht auf GitHub veröffentlicht.
-  - [ ] Auf echtem LoxBerry installieren und testen: Netbird-Status-Parsing
-    (`netbird status --detail`), Dienst-Neustart via `netbird_watchdog_helper.sh`, sudoers-Regeln,
-    Reboot-Auslösung, Cooldown-Verhalten.
+  - [ ] Nach diesem Umbau erneut auf echtem LoxBerry testen (Mehrfachauswahl-UI, Frequenz-Zähler
+    pro Wochentag, Fangfenster-Verhalten).
   - [ ] Icons sind programmatisch generiert (einfaches Signal/Punkt-Motiv, navy/amber) – ggf.
     durch ein gestaltetes Icon ersetzen.
   - [ ] Keine automatisierten Tests vorhanden (anders als Unwetter4Lox mit `tests/test_daemon.py`)
-    – bei Bedarf `tests/` mit Vitest-Äquivalent für Python (`pytest`) ergänzen, v.a. für
-    `check_netbird()`-Parsing und Cooldown-Logik.
+    – bei Bedarf `tests/` mit `pytest` ergänzen, v.a. für `check_netbird()`-Parsing,
+    Cooldown-Logik und den Frequenz-Zähler pro Wochentag.
 
 ---
 
 ## 🏗️ Architektur-Übersicht
 
 ### Daemon: `bin/hitwatch4lox_daemon.py`
-- Python-Daemon, ~380 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
+- Python-Daemon, ~430 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
   MQTT-Verbindung (keine RC=7-Reconnect-Problematik), da MQTT hier nur optionale,
   kurzlebige Statusveröffentlichung pro Zyklus ist (`paho.mqtt.publish.multiple`,
   connect→publish→disconnect).
@@ -33,7 +52,9 @@
   1. Funktion 1: `check_netbird()` → bei nicht verbunden: `restart_netbird()`, warten, erneut prüfen
   2. Bei weiterhin nicht verbunden + Funktion 2 aktiv: `trigger_reboot('netbird_watchdog', state)`
      (respektiert Cooldown via `cooldown_remaining_seconds()`)
-  3. Funktion 3: Wochentag/Uhrzeit-Abgleich gegen `WEEKLY_REBOOT`-Config, ebenfalls Cooldown-pflichtig
+  3. Funktion 3: heutiger ISO-Wochentag in `F3_WEEKDAYS`? → innerhalb Fangfenster (2×
+     `CHECK_INTERVAL`, min. 10 min) nach `HH:MM`? → Zähler für diesen Wochentag hochzählen,
+     bei `counter % EVERY_N == 0` auslösen (Cooldown-pflichtig wie F2)
   4. `save_state()` + `mqtt_publish_status()` (unkritisch bei Fehlschlag)
 - Root-Aktionen laufen über `run_helper(action)` → `sudo netbird_watchdog_helper.sh {check|restart|reboot}`
 
@@ -43,13 +64,16 @@
   diese drei exakten Aufrufe frei.
 - `check`: `netbird status --detail` (Rohtext, wird von Python geparst: Zeilen `Management:` / `Signal:`)
 - `restart`: `systemctl restart netbird` (Fallback `netbird service restart`)
-- `reboot`: `(sleep 3 && /sbin/reboot) &` – asynchron, damit der aufrufende State-Save vorher abschließt
+- `reboot`: `systemctl reboot` (Fallback `/sbin/reboot`) – **NIEMALS** wieder als Hintergrundjob
+  (`... &`) umbauen, siehe Bugfix oben (Session-Cleanup killt verwaiste Hintergrundjobs).
 
 ### state.json Struktur (DATADIR)
 - `last_check_epoch`, `last_check`, `netbird_connected`, `netbird_management`, `netbird_signal`
 - `last_restart_epoch`, `last_restart`, `restart_count_total`
-- `last_auto_reboot_epoch`, `last_auto_reboot`, `last_auto_reboot_reason` (`netbird_watchdog` | `weekly_scheduled`)
-- `last_weekly_reboot_date` (verhindert Mehrfachauslösung von Funktion 3 am selben Tag)
+- `last_auto_reboot_epoch`, `last_auto_reboot`, `last_auto_reboot_reason` (`netbird_watchdog` | `scheduled_reboot`)
+- `last_scheduled_reboot_date` (verhindert Mehrfachauslösung von Funktion 3 am selben Tag)
+- `reboot_weekday_counters` (Dict, Key = ISO-Wochentag als String "1".."7", Value = Zähler seit
+  Aktivierung – Basis für die Frequenz-Auswertung `counter % EVERY_N == 0`)
 - `status` (Text, "OK" oder Fehlermeldung)
 
 ### Cooldown-/Anti-Loop-Logik (KRITISCH)
@@ -58,11 +82,20 @@
 - `cooldown_remaining_seconds()`: `COOLDOWN_HOURS * 3600 - (now - last_auto_reboot_epoch)`
 - State wird **vor** dem eigentlichen Reboot-Aufruf persistiert (`trigger_reboot()`), da der
   Prozess durch den Reboot selbst beendet wird.
+- **Fangfenster (Funktion 3):** `_catch_window_s = max(600, CHECK_INTERVAL * 2)`. Nur innerhalb
+  dieses Fensters nach `HH:MM` wird der Zähler erhöht und ausgewertet. Außerhalb (Daemon war
+  nicht aktiv) wird der Tag als "erledigt" markiert OHNE den Zähler zu erhöhen – verhindert sowohl
+  verspätetes Nachholen als auch eine Verschiebung der Frequenz-Zählung durch Ausfallzeiten.
 
 ### Update-Lifecycle (identisch zu Unwetter4Lox – siehe dortiges CLAUDE.md für Details)
 1. `preupgrade.sh`: Config-Backup nach `/tmp`, Daemon stoppen (kein `daemon stop` – Enable-Marker bleibt)
 2. `postinstall.sh` (loxberry, VOR postroot!): paho-mqtt, default-config, chmod – KEIN Daemon-Start
 3. `postroot.sh` (root): sudoers (Daemon + Helper), Config-Restore, cron, Daemon starten
+
+**Wichtig:** `data/plugins/hitwatch4lox/` (inkl. `state.json`) wird bei einem reinen
+Update/Upgrade (ZIP erneut über bestehende Installation hochladen) NICHT angefasst. Bei einer
+expliziten **Deinstallation** entfernt LoxBerry das komplette Plugin-Verzeichnis inkl. `data/` –
+das ist beabsichtigtes LoxBerry-Verhalten, kein Bug, aber relevant beim Testen (siehe Bugfix 2 oben).
 
 ### MQTT (optional, unkritisch)
 - Präfix Standard: `HitWatch/netbird_watchdog/` (konfigurierbar über `[MQTT] TOPIC_PREFIX`)
@@ -84,14 +117,24 @@ nötig (kein Standort erforderlich) – `ajax.php` daher deutlich schlanker als 
 | Datei | Zweck |
 |---|---|
 | `app_status.php` | Netbird-Status, Watchdog-Aktionen (letzter Neustart/Reboot + Grund), Cooldown-Anzeige, Funktionen-Übersicht, Daemon-Controls |
-| `app_settings.php` | F1/F2/F3-Toggles + Parameter, F2-Toggle per JS gesperrt wenn F1 aus, MQTT-Karte |
+| `app_settings.php` | F1/F2/F3-Toggles + Parameter, F2-Toggle per JS gesperrt wenn F1 aus, F3 Wochentags-Chips (Mehrfachauswahl) + Frequenz-Select, MQTT-Karte |
 | `app_log.php` | Log-Session-Liste (identisch zu Unwetter4Lox-Muster) |
-| `app_help.php` | Die drei Funktionen, Cooldown-Erklärung, Sicherheits-/sudoers-Hinweis, MQTT-Referenz, FAQ |
+| `app_help.php` | Die drei Funktionen, Cooldown-/Fangfenster-Erklärung, Sicherheits-/sudoers-Hinweis, MQTT-Referenz, FAQ |
+
+`.sl-chip` / `.sl-chip-grid` CSS (Wochentags-Mehrfachauswahl) wurde aus dem Unwetter4Lox-Vorbild
+zurückgeholt, nachdem es beim ersten Trimmen der Komponentenbibliothek entfernt worden war.
 
 ---
 
 ## 📋 Versionshistorie
 
+- **v0.3 (2026-09-17):** Funktion 3 auf Nutzerwunsch umgebaut – mehrere Wochentage + Frequenz
+  (pro Wochentag unabhängig gezählt) statt einem einzelnen Wochentag. Config-Section
+  `[WEEKLY_REBOOT]` → `[SCHEDULED_REBOOT]`, `last_auto_reboot_reason` Wert `weekly_scheduled` →
+  `scheduled_reboot`. UI, Hilfe, README entsprechend angepasst.
+- **v0.2 (2026-09-17):** Zwei Bugs aus dem ersten Live-Test behoben (siehe oben): Reboot-Auslösung
+  über `systemctl reboot` statt Hintergrundjob; Fangfenster für Funktion 3 gegen retroaktives
+  Auslösen bei späten Neustarts/Neuinstallationen.
 - **v0.1 (2026-09-17):** Erstversion – vollständiges Plugin-Grundgerüst nach Spezifikation
   gebaut (drei Funktionen, Cooldown-Schutz, Root-Helper-Sicherheitsmodell, optionale
-  MQTT-Statusanzeige). Noch nicht auf echtem LoxBerry getestet, GitHub-Repo noch nicht angelegt.
+  MQTT-Statusanzeige).
