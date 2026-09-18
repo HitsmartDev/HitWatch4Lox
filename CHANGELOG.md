@@ -5,6 +5,25 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.8] – 2026-09-18
+
+### Behoben – MQTT-Zugangsdaten wurden nie tatsächlich verwendet (KRITISCH)
+- Die Ursache für die "not authorised"-Fehler war ein einfacher Tippfehler bei den
+  Dictionary-Keys: `_resolve_mqtt_broker()` las `cred.get('username')`/`cred.get('password')`
+  aus der LoxBerry-SDK-Antwort – die tatsächlichen Keys heißen aber `brokeruser`/`brokerpass`
+  (bestätigt durch Vergleich mit dem nachweislich funktionierenden Unwetter4Lox-Code). Die
+  Zugangsdaten wurden dadurch nie gefunden, die Verbindung lief immer anonym – gegen einen
+  Broker der anonyme Verbindungen ablehnt, führte das zu stillen Fehlschlägen.
+- Fix: Zugangsdaten-Auflösung 1:1 nach dem bewährten Unwetter4Lox-Muster nachgebaut – LoxBerry-SDK
+  zuerst (korrekte Keys), bei Fehlschlag direktes Lesen aus `config/system/general.json` /
+  `config/system/mqttgateway.json`, erst zuletzt Fallback auf die manuell in `[MQTT]` eingetragenen
+  Werte. Wird jetzt einmalig beim Daemon-Start aufgelöst (nicht mehr bei jedem MQTT-Zugriff neu)
+  und das Ergebnis (Broker, ob ein User gesetzt wurde) ins Log geschrieben – sofort sichtbar ohne
+  weiteres Debugging. Betrifft sowohl die eigene optionale Statusveröffentlichung als auch den
+  neuen Gateway-Verbindungscheck aus v0.6/v0.7.
+
+---
+
 ## [0.7] – 2026-09-18
 
 ### Behoben – MQTT-Verbindungsfehler beim Gateway-Statuscheck war unsichtbar

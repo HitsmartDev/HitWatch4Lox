@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '0.7'
+DAEMON_VERSION = '0.8'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -202,6 +202,67 @@ try:
 except ImportError:
     LB_SDK_MQTT = False
 
+# ---------------------------------------------------------------------------
+# LoxBerry MQTT-Broker-Zugangsdaten auflösen (identisches Muster wie Unwetter4Lox, das
+# nachweislich funktioniert): SDK zuerst, sonst direkt aus LoxBerrys System-Configs lesen,
+# sonst die manuell in [MQTT] eingetragenen Werte. WICHTIG: die SDK-Funktion liefert die
+# Zugangsdaten unter den Keys 'brokeruser'/'brokerpass' (NICHT 'username'/'password') –
+# ein früherer Bug hier führte zu stiller anonymer Verbindung statt echter Zugangsdaten.
+# Einmalig beim Start aufgelöst (nicht bei jedem MQTT-Zugriff neu), Ergebnis in
+# RESOLVED_MQTT_* – von mqtt_publish_status() und mqtt_read_retained() genutzt.
+# ---------------------------------------------------------------------------
+def _read_mqtt_creds_from_files():
+    for p in [os.path.join(LBHOMEDIR, 'config', 'system', 'general.json'),
+              os.path.join(LBHOMEDIR, 'config', 'system', 'mqttgateway.json')]:
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p) as f:
+                data = json.load(f)
+            search = [data]
+            for k in ['Mqtt', 'Main']:
+                if k in data and isinstance(data[k], dict):
+                    search.append(data[k])
+            broker, port, user, passwd = None, None, None, None
+            for sd in search:
+                for bk in ['Brokerhost', 'brokerhost', 'brokeraddress']:
+                    if bk in sd: broker = sd[bk]; break
+                for pk in ['Brokerport', 'brokerport']:
+                    if pk in sd: port = int(sd[pk]); break
+            for sd in search:
+                for uk in ['Brokeruser', 'brokeruser']:
+                    if uk in sd:
+                        user = sd[uk]
+                        for pk in ['Brokerpass', 'brokerpass']:
+                            if pk in sd: passwd = sd[pk]; break
+                        return (broker or '127.0.0.1', port or 1883, user, passwd)
+        except Exception:
+            pass
+    return None
+
+def _resolve_mqtt_broker_once():
+    if MQTT_USE_LB:
+        if LB_SDK_MQTT:
+            try:
+                m = lb_mqtt.mqtt_connectiondetails()
+                broker = m.get('brokeraddress', m.get('brokerhost', '127.0.0.1'))
+                port   = int(m.get('brokerport', 1883))
+                user   = m.get('brokeruser', '') or None
+                passwd = m.get('brokerpass', '') or None
+                log.info(f'MQTT: LoxBerry-Zugangsdaten via SDK aufgelöst (Broker {broker}:{port}, User={"gesetzt" if user else "keiner"})')
+                return (broker, port, user, passwd)
+            except Exception as e:
+                log.warning(f'MQTT: LoxBerry-SDK-Auflösung fehlgeschlagen ({e}) – versuche System-Configs direkt')
+        result = _read_mqtt_creds_from_files()
+        if result:
+            broker, port, user, passwd = result
+            log.info(f'MQTT: LoxBerry-Zugangsdaten aus System-Config gelesen (Broker {broker}:{port}, User={"gesetzt" if user else "keiner"})')
+            return (broker, port, user or None, passwd or None)
+        log.warning('MQTT: LoxBerry-Zugangsdaten weder per SDK noch aus System-Configs auflösbar – Fallback auf manuelle [MQTT]-Einstellungen')
+    return (MQTT_BROKER, MQTT_PORT, MQTT_USER or None, MQTT_PASS or None)
+
+RESOLVED_MQTT_BROKER, RESOLVED_MQTT_PORT, RESOLVED_MQTT_USER, RESOLVED_MQTT_PASS = _resolve_mqtt_broker_once()
+
 _lock_fd = None
 
 # ---------------------------------------------------------------------------
@@ -364,8 +425,8 @@ def mqtt_read_retained(topics, timeout=4):
     Aufrufer eine ehrliche Diagnose statt eines stillen leeren Ergebnisses bekommen."""
     if not MQTT_OK:
         return {}, 'paho-mqtt nicht installiert'
-    broker, port, user, passwd = _resolve_mqtt_broker()
-    auth = {'username': user, 'password': passwd} if user else None
+    broker, port = RESOLVED_MQTT_BROKER, RESOLVED_MQTT_PORT
+    auth = {'username': RESOLVED_MQTT_USER, 'password': RESOLVED_MQTT_PASS} if RESOLVED_MQTT_USER else None
     try:
         msgs = mqtt_subscribe_mod.simple(
             topics, hostname=broker, port=port, auth=auth,
@@ -452,24 +513,14 @@ def cooldown_remaining_seconds(state):
 # eine Kurzverbindung pro Zyklus (connect → publish → disconnect) vermeidet die
 # gesamte Reconnect-/RC=7-Komplexität dauerhafter MQTT-Clients vollständig.
 # Fehlschläge sind nicht kritisch – die Watchdog-Kernfunktion hängt nicht von MQTT ab.
+# Zugangsdaten (RESOLVED_MQTT_*) wurden bereits beim Start aufgelöst, siehe oben.
 # ---------------------------------------------------------------------------
-def _resolve_mqtt_broker():
-    if MQTT_USE_LB and LB_SDK_MQTT:
-        try:
-            cred = lb_mqtt.mqtt_connectiondetails()
-            if cred and cred.get('brokerhost'):
-                return (cred['brokerhost'], int(cred.get('brokerport', 1883)),
-                        cred.get('username') or None, cred.get('password') or None)
-        except Exception as e:
-            log.debug(f'LoxBerry MQTT Auto-Erkennung fehlgeschlagen: {e}')
-    return (MQTT_BROKER, MQTT_PORT, MQTT_USER or None, MQTT_PASS or None)
-
 def mqtt_publish_status(state):
     if not (MQTT_ENABLED and MQTT_OK):
         return
     try:
-        broker, port, user, passwd = _resolve_mqtt_broker()
-        auth = {'username': user, 'password': passwd} if user else None
+        broker, port = RESOLVED_MQTT_BROKER, RESOLVED_MQTT_PORT
+        auth = {'username': RESOLVED_MQTT_USER, 'password': RESOLVED_MQTT_PASS} if RESOLVED_MQTT_USER else None
         msgs = [
             {'topic': f'{TOPIC_PREFIX}/status',                   'payload': state.get('status', 'OK'),                         'retain': True},
             {'topic': f'{TOPIC_PREFIX}/connected',                'payload': '1' if state.get('netbird_connected') else '0',    'retain': True},

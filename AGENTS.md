@@ -1,10 +1,9 @@
 ## 📌 Projekt-Status
-- **Version:** 0.7 (2026-09-18: Mosquitto lehnt anonyme MQTT-Verbindungen ab – unser eigener
-  Gateway-Statuscheck scheiterte am selben Auth-Fehler, war aber nur auf DEBUG geloggt und damit
-  unsichtbar; jetzt wird der echte Fehlertext im Status-Tab/Log angezeigt. **Ob gültige
-  MQTT-Zugangsdaten für den Read-Zugriff überhaupt verfügbar sind, ist noch ungeklärt** – nächster
-  Schritt: Stefan prüft den jetzt sichtbaren Fehlertext und ob LoxBerry-Zugangsdaten dafür
-  existieren/eintragbar sind.)
+- **Version:** 0.8 (2026-09-18: Root Cause für die MQTT-Auth-Fehler gefunden und behoben – simpler
+  Key-Tippfehler in `_resolve_mqtt_broker()`, `username`/`password` statt der tatsächlichen
+  LoxBerry-SDK-Keys `brokeruser`/`brokerpass`. Zugangsdaten-Auflösung 1:1 nach dem bewährten
+  Unwetter4Lox-Muster nachgebaut, siehe unten. Stefan hatte den entscheidenden Hinweis: "er sollte
+  sich mit den in LoxBerry hinterlegten Credentials einloggen, so wie Unwetter4Lox das macht".)
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (ursprünglich reiner Netbird-Watchdog, jetzt
   auch MQTT-Dienste) vollständig gebaut, als Framework von Unwetter4Lox übernommen (gleiche
   LoxBerry-Plugin-Konventionen: PHP-Webfrontend im iframe-isolierten `sl-`-Komponenten-Stil,
@@ -115,7 +114,7 @@
 ## 🏗️ Architektur-Übersicht
 
 ### Daemon: `bin/hitwatch4lox_daemon.py`
-- Python-Daemon, ~770 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
+- Python-Daemon, ~820 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
   MQTT-Verbindung (keine RC=7-Reconnect-Problematik), da MQTT hier nur optionale,
   kurzlebige Statusveröffentlichung pro Zyklus ist (`paho.mqtt.publish.multiple`,
   connect→publish→disconnect).
@@ -225,6 +224,12 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v0.8 (2026-09-18):** Root-Cause-Fix: `_resolve_mqtt_broker()` las die LoxBerry-SDK-Antwort
+  unter den falschen Keys (`username`/`password` statt `brokeruser`/`brokerpass`) – Zugangsdaten
+  wurden nie gefunden, Verbindung lief immer anonym. Komplett nach dem bewährten
+  Unwetter4Lox-Muster ersetzt: SDK zuerst (korrekte Keys), dann `config/system/general.json` /
+  `mqttgateway.json` direkt, zuletzt manuelle `[MQTT]`-Werte. Einmalig beim Start aufgelöst
+  (`RESOLVED_MQTT_*`-Konstanten), Ergebnis ins Log geschrieben.
 - **v0.7 (2026-09-18):** Mosquitto lehnt anonyme MQTT-Verbindungen ab (`not authorised`,
   bestätigt per `mosquitto_sub` auf dem LoxBerry) – unser Gateway-Statuscheck scheiterte am
   selben Fehler, war aber nur auf DEBUG geloggt. `mqtt_read_retained()` gibt jetzt den echten
