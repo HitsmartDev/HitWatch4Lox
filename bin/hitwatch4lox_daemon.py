@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '0.6'
+DAEMON_VERSION = '0.7'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -359,24 +359,25 @@ def restart_process(pattern):
 
 def mqtt_read_retained(topics, timeout=4):
     """Liest den aktuellen (retained) Wert mehrerer MQTT-Topics per Kurzverbindung
-    (connect → subscribe → warten → disconnect). Fehlende/nicht erreichbare Topics fehlen
-    einfach im Ergebnis-Dict statt einen Fehler zu werfen – Aufrufer müssen mit leeren
-    Werten umgehen (z.B. falscher Topic-Präfix in der Config)."""
+    (connect → subscribe → warten → disconnect). Gibt (werte_dict, fehlertext) zurück –
+    fehlertext ist leer bei Erfolg, sonst der Grund (z.B. Auth-Fehler, Timeout), damit
+    Aufrufer eine ehrliche Diagnose statt eines stillen leeren Ergebnisses bekommen."""
     if not MQTT_OK:
-        return {}
+        return {}, 'paho-mqtt nicht installiert'
+    broker, port, user, passwd = _resolve_mqtt_broker()
+    auth = {'username': user, 'password': passwd} if user else None
     try:
-        broker, port, user, passwd = _resolve_mqtt_broker()
-        auth = {'username': user, 'password': passwd} if user else None
         msgs = mqtt_subscribe_mod.simple(
             topics, hostname=broker, port=port, auth=auth,
             msg_count=len(topics), timeout=timeout, retained=True,
         )
         if not isinstance(msgs, list):
             msgs = [msgs]
-        return {m.topic: m.payload.decode('utf-8', 'replace') for m in msgs}
+        return {m.topic: m.payload.decode('utf-8', 'replace') for m in msgs}, ''
     except Exception as e:
-        log.debug(f'MQTT: Retained-Werte konnten nicht gelesen werden: {e}')
-        return {}
+        err = str(e)[:150]
+        log.warning(f'MQTT: Retained-Werte von {broker}:{port} konnten nicht gelesen werden: {err}')
+        return {}, err
 
 def check_gateway_mqtt_status(mqtt_prefix, max_age_s=900):
     """Liest den vom LoxBerry MQTT-Gateway selbst veröffentlichten Verbindungsstatus
@@ -384,11 +385,12 @@ def check_gateway_mqtt_status(mqtt_prefix, max_age_s=900):
     (<prefix>/keepaliveepoch) – das Gateway ist damit seine eigene, autoritative Quelle für
     "bin ich mit Mosquitto verbunden", zuverlässiger als jede externe Heuristik. Rein
     informativ – löst selbst keine Aktion aus."""
-    vals = mqtt_read_retained([f'{mqtt_prefix}/status', f'{mqtt_prefix}/keepaliveepoch'])
     status_topic = f'{mqtt_prefix}/status'
     keepalive_topic = f'{mqtt_prefix}/keepaliveepoch'
+    vals, err = mqtt_read_retained([status_topic, keepalive_topic])
     if status_topic not in vals and keepalive_topic not in vals:
-        return {'checked': False, 'connected': False, 'stale': False, 'status_text': '', 'detail': 'Kein Wert unter diesem Topic-Präfix gefunden'}
+        detail = err or 'Kein Wert unter diesem Topic-Präfix gefunden (evtl. falscher Präfix)'
+        return {'checked': False, 'connected': False, 'stale': False, 'status_text': '', 'detail': detail}
     status_text = vals.get(status_topic, '')
     connected = status_text.strip().lower() == 'connected'
     stale = False

@@ -5,6 +5,22 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.7] – 2026-09-18
+
+### Behoben – MQTT-Verbindungsfehler beim Gateway-Statuscheck war unsichtbar
+- Live-Test zeigte "Verbindung zu Mosquitto: nicht prüfbar" ohne erkennbaren Grund. Ursache:
+  Mosquitto lehnt anonyme Verbindungen ab (bestätigt durch `mosquitto_sub ... Connection
+  Refused: not authorised` direkt auf dem LoxBerry), unser eigener Lesezugriff auf die
+  Gateway-MQTT-Topics scheiterte am selben Auth-Fehler – wurde aber nur auf DEBUG-Level
+  geloggt und damit faktisch nie sichtbar.
+- Fix: `mqtt_read_retained()` gibt jetzt den echten Fehlertext zurück (z.B. den Auth-Fehler)
+  statt ihn stumm zu verschlucken; wird als Grund im Status-Tab ("Verbindung zu Mosquitto")
+  und im Log (jetzt WARNING statt DEBUG) angezeigt. Hilfe-Tab um einen Troubleshooting-Hinweis
+  ergänzt. Betrifft nur die Verbindungsanzeige – die Prozesserkennung (`pgrep`) ist davon
+  unabhängig.
+
+---
+
 ## [0.6] – 2026-09-18
 
 ### Behoben – MQTT-Gateway-Erkennung war grundlegend falsch

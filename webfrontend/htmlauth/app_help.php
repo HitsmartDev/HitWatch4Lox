@@ -116,6 +116,11 @@ geprüft (der MQTT-Verbindungsstatus kann noch etwas länger den alten Wert zeig
 neu publiziert) und im Log/der Aktions-Historie vermerkt. Standardmäßig deaktiviert – vor dem
 Aktivieren empfiehlt sich ein Blick in die Aktions-Historie nach einem
 manuellen Test.</p>
+<p class="sl-hint"><b>Zeigt "Verbindung zu Mosquitto" dauerhaft "nicht prüfbar"?</b> Meist liegt
+das an MQTT-Zugangsdaten – manche Mosquitto-Installationen lehnen anonyme Verbindungen ab
+(erkennbar an <code>mosquitto_sub ... Connection Refused: not authorised</code>). Der Daemon-Log
+zeigt seit dieser Version den genauen Grund. Das beeinträchtigt nur die Verbindungsanzeige – ob
+der Gateway-<b>Prozess</b> läuft, wird davon unabhängig zuverlässig per <code>pgrep</code> erkannt.</p>
 </div>
 </details>
 

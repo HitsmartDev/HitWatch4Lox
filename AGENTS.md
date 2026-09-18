@@ -1,6 +1,10 @@
 ## 📌 Projekt-Status
-- **Version:** 0.6 (2026-09-18: Live-Diagnose auf echtem LoxBerry ergab, dass das MQTT-Gateway
-  KEIN systemd-Dienst ist – Funktion 4 Gateway-Erkennung grundlegend korrigiert)
+- **Version:** 0.7 (2026-09-18: Mosquitto lehnt anonyme MQTT-Verbindungen ab – unser eigener
+  Gateway-Statuscheck scheiterte am selben Auth-Fehler, war aber nur auf DEBUG geloggt und damit
+  unsichtbar; jetzt wird der echte Fehlertext im Status-Tab/Log angezeigt. **Ob gültige
+  MQTT-Zugangsdaten für den Read-Zugriff überhaupt verfügbar sind, ist noch ungeklärt** – nächster
+  Schritt: Stefan prüft den jetzt sichtbaren Fehlertext und ob LoxBerry-Zugangsdaten dafür
+  existieren/eintragbar sind.)
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (ursprünglich reiner Netbird-Watchdog, jetzt
   auch MQTT-Dienste) vollständig gebaut, als Framework von Unwetter4Lox übernommen (gleiche
   LoxBerry-Plugin-Konventionen: PHP-Webfrontend im iframe-isolierten `sl-`-Komponenten-Stil,
@@ -221,6 +225,11 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v0.7 (2026-09-18):** Mosquitto lehnt anonyme MQTT-Verbindungen ab (`not authorised`,
+  bestätigt per `mosquitto_sub` auf dem LoxBerry) – unser Gateway-Statuscheck scheiterte am
+  selben Fehler, war aber nur auf DEBUG geloggt. `mqtt_read_retained()` gibt jetzt den echten
+  Fehlertext zurück (WARNING statt DEBUG, sichtbar als Detail im Status-Tab). Löst das
+  Grundproblem NICHT (gültige Zugangsdaten fehlen weiterhin) – macht es nur diagnostizierbar.
 - **v0.6 (2026-09-18):** Live-Diagnose ergab: MQTT-Gateway (`mqttgateway.pl`) ist kein
   systemd-Dienst (nur `mosquitto.service` existiert), sondern ein LoxBerry-Kern-Daemon –
   `systemctl show` lieferte für die nie existierende "mqttgateway"-Unit klaglos
