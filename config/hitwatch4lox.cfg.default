@@ -24,8 +24,9 @@ EVERY_N=1
 [MQTT_WATCHDOG]
 # Funktion 4: Überwacht Mosquitto-Broker UND LoxBerry MQTT-Gateway – Überwachung/Status ist
 # NICHT einzeln abschaltbar (läuft immer sobald ENABLED=1), nur der automatische NEUSTART ist
-# pro Dienst separat schaltbar (MOSQUITTO_AUTORESTART / GATEWAY_AUTORESTART). Nutzt dasselbe
-# Prüfintervall wie Funktion 1 (WATCHDOG.CHECK_INTERVAL).
+# pro Dienst separat schaltbar (MOSQUITTO_AUTORESTART / GATEWAY_AUTORESTART). Eigenes,
+# unabhängiges Prüfintervall (CHECK_INTERVAL) – standardmäßig deutlich kürzer als Funktion 1,
+# da ein MQTT-Ausfall schneller auffallen soll.
 # Mosquitto läuft als systemd-Dienst (MOSQUITTO_SERVICE ggf. anpassen: systemctl list-units
 # --type=service | grep -i mqtt). Das LoxBerry MQTT-Gateway (mqttgateway.pl) ist dagegen KEIN
 # systemd-Dienst, sondern ein LoxBerry-Kern-Daemon – Erkennung über GATEWAY_PROCESS_PATTERN
@@ -33,6 +34,7 @@ EVERY_N=1
 # (GATEWAY_MQTT_PREFIX/status + /keepaliveepoch, z.B. sichtbar als "loxberry_mqttgateway_status"
 # in Loxone Config unter MQTT Virtual Inputs).
 ENABLED=0
+CHECK_INTERVAL=60
 MOSQUITTO_AUTORESTART=1
 MOSQUITTO_SERVICE=mosquitto
 MOSQUITTO_HOST=127.0.0.1

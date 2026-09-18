@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '0.9'
+DAEMON_VERSION = '1.0'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -154,6 +154,10 @@ def _valid_service_name(name: str) -> bool:
 # – nicht mehr einzeln abschaltbar (Nutzerwunsch: er will den Status immer sehen). Nur der
 # automatische NEUSTART bei ungesundem Zustand ist pro Dienst separat schaltbar (AUTORESTART).
 F4_ENABLED              = get_cfg('MQTT_WATCHDOG', 'ENABLED', '0') == '1'
+# Eigenes, von Funktion 1 unabhängiges Prüfintervall – standardmäßig deutlich kürzer (60s statt
+# 300s), damit ein MQTT-Ausfall schneller auffällt. Siehe Hauptschleife: LOOP_TICK richtet sich
+# nach dem kürzesten aktiven Intervall, jede Funktion prüft selbst ob SIE fällig ist.
+F4_CHECK_INTERVAL       = max(15, min(3600, int(get_cfg('MQTT_WATCHDOG', 'CHECK_INTERVAL', '60'))))
 F4_MOSQUITTO_AUTORESTART = F4_ENABLED and get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_AUTORESTART', '1') == '1'
 F4_MOSQUITTO_SERVICE    = get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_SERVICE', 'mosquitto').strip()
 F4_MOSQUITTO_HOST       = get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_HOST', '127.0.0.1').strip() or '127.0.0.1'
@@ -175,16 +179,25 @@ if F4_ENABLED and (len(F4_GATEWAY_PATTERN) < 4 or len(F4_GATEWAY_PATTERN) > 128)
     log.warning(f'MQTT_WATCHDOG.GATEWAY_PROCESS_PATTERN ungültig/zu kurz ({F4_GATEWAY_PATTERN!r}) – Fallback "mqttgateway.pl"')
     F4_GATEWAY_PATTERN = 'mqttgateway.pl'
 
+# Die Hauptschleife tickt im kürzesten aktiven Intervall (üblicherweise F4, 60s statt F1s 300s),
+# damit ein Dienst mit kurzem Prüfintervall nicht auf den nächsten langen F1-Zyklus warten muss.
+# Jede Funktion prüft selbst anhand ihres eigenen "zuletzt gelaufen"-Zeitstempels ob sie an der
+# Reihe ist (siehe run()) – der Tick ist nur die Granularität, nicht das Intervall selbst.
+LOOP_TICK = CHECK_INTERVAL
+if F4_ENABLED:
+    LOOP_TICK = min(LOOP_TICK, F4_CHECK_INTERVAL)
+LOOP_TICK = max(15, LOOP_TICK)
+
 _f3_weekdays_str = ','.join(str(w) for w in sorted(F3_WEEKDAYS))
 log.info(
     f'Konfiguration: F1(Watchdog)={"an" if F1_ENABLED else "aus"} (Intervall {CHECK_INTERVAL}s) | '
     f'F2(Reboot-Eskalation)={"an" if F2_ENABLED else "aus"} (Cooldown {COOLDOWN_HOURS}h) | '
     f'F3(Automatischer Reboot)={"an" if F3_ENABLED else "aus"} '
     f'(Tage {_f3_weekdays_str} um {F3_TIME}, alle {F3_EVERY_N}x) | '
-    f'F4(MQTT-Watchdog)={"an" if F4_ENABLED else "aus"} '
+    f'F4(MQTT-Watchdog)={"an" if F4_ENABLED else "aus"} (Intervall {F4_CHECK_INTERVAL}s) '
     f'(Mosquitto={F4_MOSQUITTO_SERVICE}, Autorestart={"an" if F4_MOSQUITTO_AUTORESTART else "aus"} | '
     f'Gateway={F4_GATEWAY_PATTERN}, Autorestart={"an" if F4_GATEWAY_AUTORESTART else "aus"}) | '
-    f'MQTT={"an" if MQTT_ENABLED else "aus"}'
+    f'MQTT={"an" if MQTT_ENABLED else "aus"} | Loop-Takt={LOOP_TICK}s'
 )
 
 try:
@@ -659,19 +672,28 @@ def run():
     _prev_connected = state.get('netbird_connected')
     _last_heartbeat = 0.0
     HEARTBEAT_SECONDS = 1800  # periodischer Log-Eintrag auch ohne Statusänderung
+    # "0.0" statt time.time(): erzwingt dass F1/F4 beim allerersten Tick sofort laufen,
+    # unabhängig von ihrem jeweiligen Intervall (kein Warten auf den ersten vollen Zyklus).
+    _last_f1_run = 0.0
+    _last_f4_run = 0.0
 
     log.info(
         f'HitWatch4Lox Daemon gestartet (Version {DAEMON_VERSION}, PID {os.getpid()}) – '
-        f'F1={F1_ENABLED} F2={F2_ENABLED} F3={F3_ENABLED} MQTT={MQTT_ENABLED and MQTT_OK}'
+        f'F1={F1_ENABLED} F2={F2_ENABLED} F3={F3_ENABLED} F4={F4_ENABLED} MQTT={MQTT_ENABLED and MQTT_OK}'
     )
 
     while True:
         try:
             now = time.time()
-            state['status'] = 'OK'
 
             # ---------------- Funktion 1: Netbird-Dienst-Watchdog ----------------
-            if F1_ENABLED:
+            # Eigenes Intervall (CHECK_INTERVAL) statt bei jedem Loop-Tick zu laufen – der Tick
+            # kann durch Funktion 4 kürzer sein als F1s eigenes Prüfintervall. 'status' wird
+            # bewusst NUR hier gesetzt (nicht mehr pauschal jeden Tick auf 'OK' zurückgesetzt) –
+            # sonst würde ein erkannter Fehler schon vor dem nächsten F1-Lauf wieder verschwinden.
+            if F1_ENABLED and (now - _last_f1_run >= CHECK_INTERVAL):
+                _last_f1_run = now
+                state['status'] = 'OK'
                 result = check_netbird()
                 state['last_check_epoch']   = now
                 state['last_check']         = fmt(now)
@@ -742,7 +764,7 @@ def run():
                     # einfach übersprungen – nächster Versuch ist erst wieder am nächsten passenden
                     # Wochentag. Der Frequenz-Zähler wird bei einem verpassten Fenster NICHT erhöht,
                     # damit ein Ausfall die "jedes 2./3./4. Mal"-Zählung nicht verschiebt.
-                    _catch_window_s = max(600, CHECK_INTERVAL * 2)
+                    _catch_window_s = max(600, LOOP_TICK * 2)
                     if not _already_handled_today and 0 <= _since_scheduled < _catch_window_s:
                         state['last_scheduled_reboot_date'] = today_str
                         counters = state.setdefault('reboot_weekday_counters', {})
@@ -777,7 +799,11 @@ def run():
             # ---------------- Funktion 4: MQTT-Dienste-Watchdog ----------------
             # Status beider Dienste wird IMMER erhoben sobald F4 aktiv ist (nicht mehr einzeln
             # abschaltbar) – nur der automatische Neustart ist pro Dienst separat schaltbar.
-            if F4_ENABLED:
+            # Eigenes Intervall (F4_CHECK_INTERVAL, Standard 60s) statt F1s CHECK_INTERVAL.
+            if F4_ENABLED and (now - _last_f4_run >= F4_CHECK_INTERVAL):
+                _last_f4_run = now
+                state['mqtt_watchdog_last_check_epoch'] = now
+                state['mqtt_watchdog_last_check']       = fmt(now)
                 m = get_service_state(F4_MOSQUITTO_SERVICE)
                 tcp_ok = tcp_check(F4_MOSQUITTO_HOST, F4_MOSQUITTO_PORT)
                 mosq_healthy = m['healthy'] and tcp_ok
@@ -864,7 +890,7 @@ def run():
         except Exception:
             log.error(f'Loop-Fehler: {traceback.format_exc()}')
 
-        time.sleep(CHECK_INTERVAL)
+        time.sleep(LOOP_TICK)
 
 if __name__ == '__main__':
     try:

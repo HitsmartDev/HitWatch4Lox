@@ -5,6 +5,30 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.0] – 2026-09-18
+
+### Geändert – UI-Übersicht (Daemon-Steuerung an oberste Stelle)
+- Die Karte "Daemon Status & Steuerung" (Restart/Stop-Buttons, Log-Link) steht jetzt ganz oben
+  auf der Statusseite statt ganz unten – direkt sichtbar ohne Scrollen.
+
+### Hinzugefügt – Letzte Prüfung für Funktion 4 (MQTT-Dienste-Watchdog)
+- Die MQTT-Dienste-Status-Karte zeigt jetzt an, wann Mosquitto/Gateway zuletzt geprüft wurden
+  (Zeitstempel + eigenes Prüfintervall), analog zur bestehenden Anzeige bei Funktion 1.
+
+### Geändert – Funktion 4 läuft mit eigenem, unabhängigem Prüfintervall
+- Bisher lief die komplette Hauptschleife im festen Takt von Funktion 1 (`CHECK_INTERVAL`,
+  Standard 300s) – Funktion 4 (MQTT-Watchdog) hing daran und konnte MQTT-Ausfälle dadurch bis zu
+  5 Minuten spät erkennen.
+- Neue Architektur: Ein gemeinsamer `LOOP_TICK` (das Minimum aus allen aktiven Funktionsintervallen,
+  mind. 15s) treibt die Hauptschleife, jede Funktion prüft intern selbst ob ihr eigenes Intervall
+  bereits abgelaufen ist. Funktion 4 bekommt ein eigenes `CHECK_INTERVAL` (Standard 60s, in den
+  Settings einstellbar 15–300s) und läuft damit unabhängig und deutlich häufiger als Funktion 1.
+- Selbst gefundene Regression beim Umbau vorab behoben: `state['status']` darf nur noch
+  zurückgesetzt werden wenn Funktion 1 tatsächlich lief – sonst wäre ein erkannter Fehlerstatus
+  bei jedem Loop-Tick sofort wieder überschrieben worden, bevor die nächste echte Prüfung erfolgt.
+
+---
+
 ## [0.9] – 2026-09-18
 
 ### Behoben – MQTT-Statuscheck konnte den Watchdog dauerhaft einfrieren (KRITISCH)

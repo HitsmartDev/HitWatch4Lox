@@ -27,6 +27,7 @@ $f4_mosq_autorestart = $f4_enabled && ($cfg['MQTT_WATCHDOG']['MOSQUITTO_AUTOREST
 $f4_gw_autorestart   = $f4_enabled && ($cfg['MQTT_WATCHDOG']['GATEWAY_AUTORESTART'] ?? '0') == '1';
 $f4_mosq_service = $cfg['MQTT_WATCHDOG']['MOSQUITTO_SERVICE'] ?? 'mosquitto';
 $f4_gw_pattern   = $cfg['MQTT_WATCHDOG']['GATEWAY_PROCESS_PATTERN'] ?? 'mqttgateway.pl';
+$f4_check_interval = (int)($cfg['MQTT_WATCHDOG']['CHECK_INTERVAL'] ?? 60);
 
 // ── Daemon-Status (PID-Check + Prozessname) ──
 $pidfile        = $lbplogdir . '/daemon.pid';
@@ -105,6 +106,58 @@ $action_log = array_reverse($state['action_log'] ?? []); // neueste zuerst
 
 render_header('app_status');
 ?>
+
+<!-- ================================================================
+     DAEMON STATUS & STEUERUNG
+     ================================================================ -->
+<div class="sl-card">
+    <div class="sl-card-head">
+        <span class="sl-card-head-title">🔧 <?= h($L['MAIN.TITLE'] ?? 'HitWatch4Lox') ?> <?= h($L['MAIN.STATUS'] ?? 'Status') ?></span>
+        <?php
+        $log_titles = [
+            'green'  => 'Log OK – keine Fehler/Warnungen in den letzten 30 min',
+            'orange' => 'Warnungen in den letzten 30 min – Log prüfen',
+            'red'    => 'Fehler in den letzten 30 min – Log prüfen',
+            'none'   => '',
+        ];
+        if ($log_health !== 'none'):
+        ?>
+        <span class="sl-log-light <?= $log_health ?>" title="<?= $log_titles[$log_health] ?>"></span>
+        <?php endif; ?>
+        <span class="sl-badge <?= $daemon_running ? 'ok' : 'err' ?>">
+            <?= $daemon_running ? ($L['MAIN.DAEMON_RUNNING'] ?? 'Läuft') : ($L['MAIN.DAEMON_STOPPED'] ?? 'Gestoppt') ?>
+        </span>
+    </div>
+    <div class="sl-card-body">
+        <div class="sl-daemon-row">
+            <div>
+                <div class="sl-daemon-name">
+                    <span class="sl-status-dot <?= $daemon_running ? 'on' : 'off' ?>"></span>
+                    Daemon
+                    <?= $daemon_running ? ($L['MAIN.DAEMON_RUNNING'] ?? 'läuft') : ($L['MAIN.DAEMON_STOPPED'] ?? 'gestoppt') ?>
+                </div>
+                <div class="sl-daemon-meta">
+                    <?php if (!$daemon_running && !$daemon_enabled): ?>
+                    <span class="stale">⏸️ Deaktiviert – manuell gestoppt. Kein Autostart, kein Watchdog. „Start" reaktiviert.</span>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <div class="sl-daemon-btns">
+<?php if ($daemon_running): ?>
+                <button id="btn-restart" class="sl-btn primary sm">↺ Restart</button>
+                <button class="sl-btn danger sm" onclick="if(confirm('Daemon wirklich stoppen? Autostart nach Reboot und Watchdog werden deaktiviert – der Daemon startet erst wieder wenn du hier „Start" drückst.')) fetch('ajax.php?action=stop_json').then(function(){setTimeout(function(){location.reload()},1500)})">■ Stop</button>
+<?php else: ?>
+                <button id="btn-start" class="sl-btn success sm">▶ Start</button>
+<?php endif; ?>
+<?php if ($_clog): ?>
+                <a href="/admin/system/tools/logfile.cgi?logfile=<?= urlencode($_clog) ?>&package=<?= urlencode($lbpplugindir) ?>&name=Daemon&header=html&format=template"
+                   target="_blank" class="sl-btn secondary sm">📋 Log</a>
+<?php endif; ?>
+                <span id="daemon-action-status" style="font-size:0.75rem;color:#aaa;display:none"></span>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- ================================================================
      NETBIRD-STATUS
@@ -220,7 +273,16 @@ render_header('app_status');
     $g_restarts = (int)($state['gateway_restart_count'] ?? 0);
     $g_checked  = (bool)($state['gateway_broker_checked'] ?? false);
     $g_linked   = (bool)($state['gateway_broker_linked'] ?? false);
+    $f4_last_check       = $state['mqtt_watchdog_last_check'] ?? '–';
+    $f4_last_check_epoch = (int)($state['mqtt_watchdog_last_check_epoch'] ?? 0);
+    $f4_age      = $f4_last_check_epoch > 0 ? time() - $f4_last_check_epoch : 0;
+    $f4_is_stale = ($f4_last_check_epoch > 0 && $f4_age > ($f4_check_interval * 3 + 60));
 ?>
+        <ul class="sl-info-list">
+            <li><span class="sl-info-key">Letzte Prüfung</span>
+                <span class="sl-info-val <?= $f4_is_stale ? 'alert' : '' ?>"><?= h($f4_last_check) ?></span></li>
+            <li><span class="sl-info-key">Prüfintervall</span> <span class="sl-info-val"><?= $f4_check_interval ?> s</span></li>
+        </ul>
         <div class="sl-section-title">🦟 Mosquitto (<?= h($f4_mosq_service) ?>)</div>
         <ul class="sl-info-list">
             <li><span class="sl-info-key">Dienststatus</span>
@@ -285,58 +347,6 @@ render_header('app_status');
             (<?= $f3_every_n <= 1 ? 'jedes Mal' : 'nur alle ' . $f3_every_n . 'x' ?>).</p>
         <?php endif; ?>
         <a href="app_settings.php" class="sl-btn secondary sm">⚙️ Zu den Einstellungen</a>
-    </div>
-</div>
-
-<!-- ================================================================
-     DAEMON STATUS & STEUERUNG
-     ================================================================ -->
-<div class="sl-card">
-    <div class="sl-card-head">
-        <span class="sl-card-head-title">🔧 <?= h($L['MAIN.TITLE'] ?? 'HitWatch4Lox') ?> <?= h($L['MAIN.STATUS'] ?? 'Status') ?></span>
-        <?php
-        $log_titles = [
-            'green'  => 'Log OK – keine Fehler/Warnungen in den letzten 30 min',
-            'orange' => 'Warnungen in den letzten 30 min – Log prüfen',
-            'red'    => 'Fehler in den letzten 30 min – Log prüfen',
-            'none'   => '',
-        ];
-        if ($log_health !== 'none'):
-        ?>
-        <span class="sl-log-light <?= $log_health ?>" title="<?= $log_titles[$log_health] ?>"></span>
-        <?php endif; ?>
-        <span class="sl-badge <?= $daemon_running ? 'ok' : 'err' ?>">
-            <?= $daemon_running ? ($L['MAIN.DAEMON_RUNNING'] ?? 'Läuft') : ($L['MAIN.DAEMON_STOPPED'] ?? 'Gestoppt') ?>
-        </span>
-    </div>
-    <div class="sl-card-body">
-        <div class="sl-daemon-row">
-            <div>
-                <div class="sl-daemon-name">
-                    <span class="sl-status-dot <?= $daemon_running ? 'on' : 'off' ?>"></span>
-                    Daemon
-                    <?= $daemon_running ? ($L['MAIN.DAEMON_RUNNING'] ?? 'läuft') : ($L['MAIN.DAEMON_STOPPED'] ?? 'gestoppt') ?>
-                </div>
-                <div class="sl-daemon-meta">
-                    <?php if (!$daemon_running && !$daemon_enabled): ?>
-                    <span class="stale">⏸️ Deaktiviert – manuell gestoppt. Kein Autostart, kein Watchdog. „Start" reaktiviert.</span>
-                    <?php endif; ?>
-                </div>
-            </div>
-            <div class="sl-daemon-btns">
-<?php if ($daemon_running): ?>
-                <button id="btn-restart" class="sl-btn primary sm">↺ Restart</button>
-                <button class="sl-btn danger sm" onclick="if(confirm('Daemon wirklich stoppen? Autostart nach Reboot und Watchdog werden deaktiviert – der Daemon startet erst wieder wenn du hier „Start" drückst.')) fetch('ajax.php?action=stop_json').then(function(){setTimeout(function(){location.reload()},1500)})">■ Stop</button>
-<?php else: ?>
-                <button id="btn-start" class="sl-btn success sm">▶ Start</button>
-<?php endif; ?>
-<?php if ($_clog): ?>
-                <a href="/admin/system/tools/logfile.cgi?logfile=<?= urlencode($_clog) ?>&package=<?= urlencode($lbpplugindir) ?>&name=Daemon&header=html&format=template"
-                   target="_blank" class="sl-btn secondary sm">📋 Log</a>
-<?php endif; ?>
-                <span id="daemon-action-status" style="font-size:0.75rem;color:#aaa;display:none"></span>
-            </div>
-        </div>
     </div>
 </div>
 

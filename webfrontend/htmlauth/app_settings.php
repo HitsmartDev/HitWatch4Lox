@@ -76,6 +76,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $c .= "[MQTT_WATCHDOG]\n";
         $c .= "ENABLED={$f4_en}\n";
+        $c .= 'CHECK_INTERVAL=' . max(15, min(900, intval($_POST['f4_check_interval'] ?? 60))) . "\n";
         $c .= "MOSQUITTO_AUTORESTART={$f4_mosq_auto}\n";
         $c .= "MOSQUITTO_SERVICE={$mosq_service}\n";
         $c .= "MOSQUITTO_HOST={$mosq_host}\n";
@@ -261,11 +262,19 @@ render_header('app_settings');
                 <span class="sl-toggle-label">MQTT-Dienste-Watchdog aktivieren</span>
             </div>
             <p class="sl-hint">Status von Mosquitto-Broker und LoxBerry MQTT-Gateway wird immer
-                angezeigt sobald diese Funktion aktiv ist (Prüfintervall = Funktion 1) – die
+                angezeigt sobald diese Funktion aktiv ist (eigenes Prüfintervall, siehe unten) – die
                 Überwachung selbst lässt sich nicht einzeln abschalten. Was du separat steuern
                 kannst, ist ob ein ungesunder Dienst automatisch neu gestartet wird (unten).
                 Nutze <code>systemctl list-units --type=service | grep -i mqtt</code> per SSH,
                 falls du die genauen Dienstnamen deines Systems prüfen willst.</p>
+        </div>
+        <div class="sl-slider-row">
+            <label>Prüfintervall <span class="sl-slider-val" id="sf4ci"><?= cv('MQTT_WATCHDOG','CHECK_INTERVAL','60') ?></span> s</label>
+            <input type="range" name="f4_check_interval" min="15" max="300" step="15"
+                   value="<?= cv('MQTT_WATCHDOG','CHECK_INTERVAL','60') ?>"
+                   oninput="document.getElementById('sf4ci').textContent=this.value">
+            <p class="sl-hint">Eigenes, unabhängiges Prüfintervall – läuft getrennt vom Prüfintervall der
+                Funktion 1, da ein MQTT-Ausfall schneller auffallen soll.</p>
         </div>
         <hr>
         <div class="sl-field">

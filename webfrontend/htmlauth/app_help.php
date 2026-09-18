@@ -82,8 +82,10 @@ spätere Neustart des Daemons am selben Tag erneut einen überfälligen Reboot a
 <details class="sl-details-nested">
 <summary>Funktion 4 – MQTT-Dienste-Watchdog</summary>
 <div class="sl-details-body">
-<p>Überwacht Mosquitto-Broker <b>und</b> das LoxBerry MQTT-Gateway (Prüfintervall = Funktion 1).
-Die Status-Anzeige ist <b>nicht einzeln abschaltbar</b> – sobald Funktion 4 aktiv ist, siehst du
+<p>Überwacht Mosquitto-Broker <b>und</b> das LoxBerry MQTT-Gateway mit einem eigenen,
+unabhängigen Prüfintervall (Standard 60s, einstellbar in den Einstellungen – bewusst kürzer als
+Funktion 1, da ein MQTT-Ausfall schneller auffallen soll). Die Status-Anzeige zeigt zusätzlich
+an, wann zuletzt geprüft wurde. Sie ist <b>nicht einzeln abschaltbar</b> – sobald Funktion 4 aktiv ist, siehst du
 immer den Zustand beider Dienste. Separat schaltbar ist nur, ob ein ungesunder Dienst
 <b>automatisch neu gestartet</b> wird (gleiches Prinzip wie Funktion 1, nur für MQTT statt
 Netbird – ein Versuch pro Erkennungszyklus, kein Cooldown/Reboot-Eskalation nötig).</p>

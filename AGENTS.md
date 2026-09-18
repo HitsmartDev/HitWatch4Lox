@@ -1,8 +1,9 @@
 ## 📌 Projekt-Status
-- **Version:** 0.9 (2026-09-18: `mqtt_read_retained()` konnte den gesamten Watchdog-Loop
-  einfrieren – `subscribe.simple()` fehlte in der installierten paho-Version der `timeout`-
-  Parameter, UND ohne Timeout hätte die Funktion im schlimmsten Fall unbegrenzt blockiert.
-  Komplett auf `paho.mqtt.client` mit eigener Zeitlimit-Schleife umgestellt.)
+- **Version:** 1.0 (2026-09-18: UI-Umbau + eigenes Prüfintervall für Funktion 4. Daemon-Steuerung
+  jetzt ganz oben auf der Statusseite; MQTT-Dienste-Status zeigt jetzt einen "Letzte Prüfung"-
+  Zeitstempel; Funktion 4 hängt nicht mehr am `CHECK_INTERVAL` von Funktion 1, sondern läuft über
+  eine neue `LOOP_TICK`-Hauptschleifen-Architektur mit eigenem, in den Settings einstellbarem
+  Intervall – Standard 60s statt vorher indirekt 300s.)
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (ursprünglich reiner Netbird-Watchdog, jetzt
   auch MQTT-Dienste) vollständig gebaut, als Framework von Unwetter4Lox übernommen (gleiche
   LoxBerry-Plugin-Konventionen: PHP-Webfrontend im iframe-isolierten `sl-`-Komponenten-Stil,
@@ -88,6 +89,25 @@
   5. **Trigger-Bedingung erweitert:** Neustart-Versuch jetzt bei "läuft nicht" ODER "läuft, aber
      laut MQTT-Status nicht mit Mosquitto verbunden" (vorher nur bei totem Prozess) – konsistent
      mit Funktion 1s Philosophie (Prozess lebt ≠ tatsächlich verbunden).
+- **v1.0 – UI-Umbau + eigenes F4-Prüfintervall (auf Nutzerwunsch, drei Punkte in einer Anfrage):**
+  1. **Daemon-Steuerung nach oben:** Die Karte "Daemon Status & Steuerung" (Restart/Stop, Log-Link)
+     stand bisher ganz unten auf `app_status.php` – jetzt die erste Karte direkt nach dem Header.
+  2. **"Letzte Prüfung" für Funktion 4:** Neue State-Felder `mqtt_watchdog_last_check`/
+     `mqtt_watchdog_last_check_epoch` (geschrieben zu Beginn jedes F4-Durchlaufs), in der
+     MQTT-Dienste-Status-Karte angezeigt (analog zur bestehenden Anzeige bei Funktion 1), inkl.
+     Staleness-Markierung wenn seit > 3× Prüfintervall + 60s keine Prüfung mehr lief.
+  3. **F4 entkoppelt von F1s Intervall:** Bisher trieb ein einziges `CHECK_INTERVAL` (F1, Standard
+     300s) die komplette Hauptschleife – F4 hing daran und konnte MQTT-Ausfälle dadurch bis zu 5
+     Minuten spät erkennen. Neue `LOOP_TICK`-Architektur: das Minimum aus allen aktiven
+     Funktionsintervallen (mind. 15s) treibt `time.sleep()`, jede Funktion prüft selbst per
+     `now - _last_X_run >= X_INTERVAL` ob sie an der Reihe ist. Neues `MQTT_WATCHDOG.CHECK_INTERVAL`
+     (Default 60s, Settings-Slider 15–300s, Daemon-seitig geclamped 15–3600s). Fangfenster von
+     Funktion 3 nutzt jetzt `LOOP_TICK` statt `CHECK_INTERVAL` als Basis.
+  4. **Selbst gefundene Regression vorab behoben:** Beim Umbau wäre `state['status'] = 'OK'`
+     (bisher am Anfang jedes Loop-Ticks) sonst bei jedem Tick zurückgesetzt worden, auch wenn
+     Funktion 1 in diesem Tick gar nicht lief – ein erkannter Fehlerstatus wäre so sofort wieder
+     verschwunden, bevor die nächste echte Prüfung stattfindet. Reset jetzt nur noch innerhalb
+     des F1-gegateten Blocks.
 - **Noch offen:**
   - [ ] **Mit v0.9 erstmals wirklich testbar:** v0.6 (falscher Erkennungsweg) → v0.7 (Fehler
     unsichtbar) → v0.8 (falsche Auth-Keys) → v0.9 (Timeout-Bug) verhinderten jeweils einen echten
@@ -119,18 +139,23 @@
   MQTT-Verbindung (keine RC=7-Reconnect-Problematik), da MQTT hier nur optionale,
   kurzlebige Statusveröffentlichung pro Zyklus ist (`paho.mqtt.publish.multiple`,
   connect→publish→disconnect).
-- Hauptschleife `run()`: alle `CHECK_INTERVAL` Sekunden (Standard 300s)
-  1. Funktion 1: `check_netbird()` → bei nicht verbunden: `restart_netbird()`, warten, erneut prüfen
+- Hauptschleife `run()` (seit v1.0): treibt sich im Takt von `LOOP_TICK` (= Minimum aus allen
+  aktiven Funktionsintervallen, mind. 15s) statt einem einzigen festen Intervall. Jede Funktion
+  gated ihre eigene Ausführung selbst per `now - _last_X_run >= X_INTERVAL`:
+  1. Funktion 1 (eigenes `CHECK_INTERVAL`, Standard 300s): `check_netbird()` → bei nicht
+     verbunden: `restart_netbird()`, warten, erneut prüfen
   2. Bei weiterhin nicht verbunden + Funktion 2 aktiv: `trigger_reboot('netbird_watchdog', state)`
      (respektiert Cooldown via `cooldown_remaining_seconds()`)
-  3. Funktion 3: heutiger ISO-Wochentag in `F3_WEEKDAYS`? → innerhalb Fangfenster (2×
-     `CHECK_INTERVAL`, min. 10 min) nach `HH:MM`? → Zähler für diesen Wochentag hochzählen,
-     bei `counter % EVERY_N == 0` auslösen (Cooldown-pflichtig wie F2)
-  4. Funktion 4: Status IMMER erheben – Mosquitto via `get_service_state()` (systemd) +
-     `tcp_check()`; Gateway via `get_process_state()` (`pgrep`, KEIN systemd) +
-     `check_gateway_mqtt_status()` (liest die vom Gateway selbst veröffentlichten MQTT-Topics).
-     Neustart nur wenn die jeweilige `..._AUTORESTART`-Config an ist (kein Cooldown, kein Reboot,
-     nur Dienst-/Prozess-Neustart; Gateway-Neustart via `restart_process()`/`pkill`, unprivilegiert)
+  3. Funktion 3: läuft jeden Tick, wall-clock-gegated. Heutiger ISO-Wochentag in `F3_WEEKDAYS`? →
+     innerhalb Fangfenster (2× `LOOP_TICK`, min. 10 min) nach `HH:MM`? → Zähler für diesen
+     Wochentag hochzählen, bei `counter % EVERY_N == 0` auslösen (Cooldown-pflichtig wie F2)
+  4. Funktion 4 (eigenes `CHECK_INTERVAL`, Standard 60s, seit v1.0 entkoppelt von F1): Status
+     IMMER erheben – Mosquitto via `get_service_state()` (systemd) + `tcp_check()`; Gateway via
+     `get_process_state()` (`pgrep`, KEIN systemd) + `check_gateway_mqtt_status()` (liest die vom
+     Gateway selbst veröffentlichten MQTT-Topics). Schreibt `mqtt_watchdog_last_check(_epoch)` zu
+     Beginn jedes Durchlaufs. Neustart nur wenn die jeweilige `..._AUTORESTART`-Config an ist
+     (kein Cooldown, kein Reboot, nur Dienst-/Prozess-Neustart; Gateway-Neustart via
+     `restart_process()`/`pkill`, unprivilegiert)
   5. `log_action()` bei jedem Neustart/Reboot → `save_state()` + `mqtt_publish_status()` (unkritisch bei Fehlschlag)
 - Root-Aktionen laufen über `run_helper(action, args=None)` → `sudo netbird_watchdog_helper.sh {check|restart|reboot|restart_service <name>}`
   – NUR für Netbird + Mosquitto. Das MQTT-Gateway braucht kein Root (pgrep/pkill/MQTT-Read
@@ -165,6 +190,8 @@
   Mosquitto), `gateway_healthy`, `gateway_broker_checked`, `gateway_broker_linked`,
   `gateway_broker_detail`, `gateway_last_restart_epoch`, `gateway_last_restart`,
   `gateway_restart_count` (Funktion 4)
+- `mqtt_watchdog_last_check_epoch`, `mqtt_watchdog_last_check` (seit v1.0, zu Beginn jedes
+  F4-Durchlaufs geschrieben, unabhängig von F1s `last_check`)
 - `action_log` (Liste, max. 200 Einträge, neueste am Ende – `{epoch, time, action, success,
   detail}`; `action` ∈ `netbird_restart`/`mosquitto_restart`/`gateway_restart`/`netbird_watchdog`/
   `scheduled_reboot`; PHP zeigt sie umgekehrt/neueste zuerst via `array_reverse()`)
@@ -176,7 +203,8 @@
 - `cooldown_remaining_seconds()`: `COOLDOWN_HOURS * 3600 - (now - last_auto_reboot_epoch)`
 - State wird **vor** dem eigentlichen Reboot-Aufruf persistiert (`trigger_reboot()`), da der
   Prozess durch den Reboot selbst beendet wird.
-- **Fangfenster (Funktion 3):** `_catch_window_s = max(600, CHECK_INTERVAL * 2)`. Nur innerhalb
+- **Fangfenster (Funktion 3):** `_catch_window_s = max(600, LOOP_TICK * 2)` (seit v1.0, vorher
+  `CHECK_INTERVAL * 2`). Nur innerhalb
   dieses Fensters nach `HH:MM` wird der Zähler erhöht und ausgewertet. Außerhalb (Daemon war
   nicht aktiv) wird der Tag als "erledigt" markiert OHNE den Zähler zu erhöhen – verhindert sowohl
   verspätetes Nachholen als auch eine Verschiebung der Frequenz-Zählung durch Ausfallzeiten.
@@ -225,6 +253,10 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.0 (2026-09-18):** Daemon-Steuerung-Karte auf `app_status.php` nach oben verschoben;
+  "Letzte Prüfung"-Anzeige für Funktion 4 (Zeitstempel + Staleness); Funktion 4 läuft jetzt mit
+  eigenem, unabhängigem Prüfintervall (`MQTT_WATCHDOG.CHECK_INTERVAL`, Default 60s) statt am
+  `CHECK_INTERVAL` von Funktion 1 zu hängen – neue `LOOP_TICK`-Hauptschleifen-Architektur.
 - **v0.9 (2026-09-18):** `mqtt_read_retained()` (Gateway-Statuscheck) konnte den gesamten
   Watchdog-Loop einfrieren – `subscribe.simple()` kannte den `timeout`-Parameter in der
   installierten paho-Version nicht UND hätte ohne Timeout im Zweifel unbegrenzt blockiert.
