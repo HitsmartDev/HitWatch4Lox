@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '0.8'
+DAEMON_VERSION = '0.9'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -189,7 +189,7 @@ log.info(
 
 try:
     import paho.mqtt.publish as mqtt_publish_mod
-    import paho.mqtt.subscribe as mqtt_subscribe_mod
+    import paho.mqtt.client as mqtt_client_mod
     MQTT_OK = True
 except ImportError:
     MQTT_OK = False
@@ -418,27 +418,78 @@ def restart_process(pattern):
         log.error(f'Prozess-Beenden fehlgeschlagen ({pattern}): {e}')
         return False
 
+# CONNACK-Codes (MQTT 3.1.1) für eine verständliche Fehlermeldung statt eines rohen RC-Werts.
+_MQTT_CONNACK_RC = {
+    1: 'Protokoll-Version nicht unterstützt',
+    2: 'Client-ID abgelehnt',
+    3: 'Broker nicht verfügbar',
+    4: 'Ungültige Zugangsdaten (Benutzername/Passwort)',
+    5: 'Nicht autorisiert',
+}
+
 def mqtt_read_retained(topics, timeout=4):
     """Liest den aktuellen (retained) Wert mehrerer MQTT-Topics per Kurzverbindung
     (connect → subscribe → warten → disconnect). Gibt (werte_dict, fehlertext) zurück –
     fehlertext ist leer bei Erfolg, sonst der Grund (z.B. Auth-Fehler, Timeout), damit
-    Aufrufer eine ehrliche Diagnose statt eines stillen leeren Ergebnisses bekommen."""
+    Aufrufer eine ehrliche Diagnose statt eines stillen leeren Ergebnisses bekommen.
+
+    Nutzt bewusst paho.mqtt.client direkt statt subscribe.simple(): simple() hat je nach
+    installierter paho-Version keinen 'timeout'-Parameter (TypeError) UND würde ohne Timeout
+    im schlimmsten Fall UNBEGRENZT blockieren, falls ein Topic nie eintrifft – das würde den
+    gesamten Watchdog-Loop einfrieren. Hier gilt ein hart durchgesetztes Zeitlimit."""
     if not MQTT_OK:
         return {}, 'paho-mqtt nicht installiert'
     broker, port = RESOLVED_MQTT_BROKER, RESOLVED_MQTT_PORT
-    auth = {'username': RESOLVED_MQTT_USER, 'password': RESOLVED_MQTT_PASS} if RESOLVED_MQTT_USER else None
+    results = {}
+    conn = {'rc': None}  # CONNACK-Code kommt asynchron im Netzwerk-Thread, kein Rückgabewert von connect()
+    c = None
     try:
-        msgs = mqtt_subscribe_mod.simple(
-            topics, hostname=broker, port=port, auth=auth,
-            msg_count=len(topics), timeout=timeout, retained=True,
-        )
-        if not isinstance(msgs, list):
-            msgs = [msgs]
-        return {m.topic: m.payload.decode('utf-8', 'replace') for m in msgs}, ''
+        try:
+            c = mqtt_client_mod.Client(mqtt_client_mod.CallbackAPIVersion.VERSION1)
+        except (AttributeError, TypeError):
+            c = mqtt_client_mod.Client()
+        if RESOLVED_MQTT_USER:
+            c.username_pw_set(RESOLVED_MQTT_USER, RESOLVED_MQTT_PASS)
+
+        def _on_connect(client, userdata, flags, rc):
+            conn['rc'] = rc
+            if rc == 0:
+                for t in topics:
+                    client.subscribe(t)
+
+        def _on_message(client, userdata, msg):
+            results[msg.topic] = msg.payload.decode('utf-8', 'replace')
+
+        c.on_connect = _on_connect
+        c.on_message = _on_message
+        # connect_async() statt connect(): der eigentliche TCP-Connect läuft im Netzwerk-Thread
+        # von loop_start() – so bleibt das untenstehende Zeitlimit auch bei einem hängenden
+        # DNS-Lookup/TCP-Handshake wirksam (ein blockierendes connect() könnte das umgehen).
+        c.connect_async(broker, port, keepalive=max(10, timeout + 5))
+        c.loop_start()
+        deadline = time.time() + timeout
+        while time.time() < deadline and len(results) < len(topics):
+            time.sleep(0.1)
+        if results:
+            return dict(results), ''
+        # Kein einziger Wert angekommen – Grund ermitteln statt stumm leer zurückzugeben.
+        if conn['rc'] is None:
+            return {}, 'Keine Verbindung zum Broker zustande gekommen (Timeout)'
+        if conn['rc'] != 0:
+            reason = _MQTT_CONNACK_RC.get(conn['rc'], f'RC={conn["rc"]}')
+            log.warning(f'MQTT: Verbindung zu {broker}:{port} abgelehnt – {reason}')
+            return {}, reason
+        return {}, ''
     except Exception as e:
         err = str(e)[:150]
         log.warning(f'MQTT: Retained-Werte von {broker}:{port} konnten nicht gelesen werden: {err}')
         return {}, err
+    finally:
+        if c is not None:
+            try: c.loop_stop()
+            except Exception: pass
+            try: c.disconnect()
+            except Exception: pass
 
 def check_gateway_mqtt_status(mqtt_prefix, max_age_s=900):
     """Liest den vom LoxBerry MQTT-Gateway selbst veröffentlichten Verbindungsstatus

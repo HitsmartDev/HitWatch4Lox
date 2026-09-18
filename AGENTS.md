@@ -1,9 +1,8 @@
 ## 📌 Projekt-Status
-- **Version:** 0.8 (2026-09-18: Root Cause für die MQTT-Auth-Fehler gefunden und behoben – simpler
-  Key-Tippfehler in `_resolve_mqtt_broker()`, `username`/`password` statt der tatsächlichen
-  LoxBerry-SDK-Keys `brokeruser`/`brokerpass`. Zugangsdaten-Auflösung 1:1 nach dem bewährten
-  Unwetter4Lox-Muster nachgebaut, siehe unten. Stefan hatte den entscheidenden Hinweis: "er sollte
-  sich mit den in LoxBerry hinterlegten Credentials einloggen, so wie Unwetter4Lox das macht".)
+- **Version:** 0.9 (2026-09-18: `mqtt_read_retained()` konnte den gesamten Watchdog-Loop
+  einfrieren – `subscribe.simple()` fehlte in der installierten paho-Version der `timeout`-
+  Parameter, UND ohne Timeout hätte die Funktion im schlimmsten Fall unbegrenzt blockiert.
+  Komplett auf `paho.mqtt.client` mit eigener Zeitlimit-Schleife umgestellt.)
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (ursprünglich reiner Netbird-Watchdog, jetzt
   auch MQTT-Dienste) vollständig gebaut, als Framework von Unwetter4Lox übernommen (gleiche
   LoxBerry-Plugin-Konventionen: PHP-Webfrontend im iframe-isolierten `sl-`-Komponenten-Stil,
@@ -90,13 +89,15 @@
      laut MQTT-Status nicht mit Mosquitto verbunden" (vorher nur bei totem Prozess) – konsistent
      mit Funktion 1s Philosophie (Prozess lebt ≠ tatsächlich verbunden).
 - **Noch offen:**
-  - [ ] **Exakten `loxberry/mqttgateway`-Topic-Pfad noch nicht verifiziert** – Stefan soll
-    `mosquitto_sub -h localhost -t 'loxberry/mqttgateway/#' -v -C 8` ausführen und das Ergebnis
-    teilen, damit `GATEWAY_MQTT_PREFIX` (Default aktuell nur eine plausible Annahme aus der
-    Loxone-UI-Anzeige) bestätigt oder korrigiert werden kann.
-  - [ ] Nach diesem Umbau erneut auf echtem LoxBerry testen (Mehrfachauswahl-UI F3, Frequenz-Zähler
-    pro Wochentag, Fangfenster-Verhalten, Funktion 4 Gateway-Erkennung + Autorestart-Logik mit
-    echtem Topic-Präfix, Aktions-Historie über mehrere Tage).
+  - [ ] **Mit v0.9 erstmals wirklich testbar:** v0.6 (falscher Erkennungsweg) → v0.7 (Fehler
+    unsichtbar) → v0.8 (falsche Auth-Keys) → v0.9 (Timeout-Bug) verhinderten jeweils einen echten
+    Funktionstest von "Verbindung zu Mosquitto". Exakten `loxberry/mqttgateway`-Topic-Pfad daher
+    weiterhin nicht abschließend verifiziert – Stefan soll nach Installation von v0.9 prüfen ob
+    "Verbindung zu Mosquitto" jetzt "verbunden" zeigt; falls nicht, zeigt das Log jetzt den
+    genauen Grund (CONNACK-Fehlertext oder "kein Wert unter Präfix").
+  - [ ] Mehrfachauswahl-UI F3, Frequenz-Zähler pro Wochentag, Fangfenster-Verhalten, Autorestart-
+    Logik (Mosquitto + Gateway) und Aktions-Historie über mehrere Tage noch nicht auf echtem
+    LoxBerry verifiziert.
   - [ ] Icons sind programmatisch generiert (einfaches Signal/Punkt-Motiv, navy/amber) – ggf.
     durch ein gestaltetes Icon ersetzen.
   - [ ] Keine automatisierten Tests vorhanden (anders als Unwetter4Lox mit `tests/test_daemon.py`)
@@ -114,7 +115,7 @@
 ## 🏗️ Architektur-Übersicht
 
 ### Daemon: `bin/hitwatch4lox_daemon.py`
-- Python-Daemon, ~820 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
+- Python-Daemon, ~875 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
   MQTT-Verbindung (keine RC=7-Reconnect-Problematik), da MQTT hier nur optionale,
   kurzlebige Statusveröffentlichung pro Zyklus ist (`paho.mqtt.publish.multiple`,
   connect→publish→disconnect).
@@ -224,6 +225,13 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v0.9 (2026-09-18):** `mqtt_read_retained()` (Gateway-Statuscheck) konnte den gesamten
+  Watchdog-Loop einfrieren – `subscribe.simple()` kannte den `timeout`-Parameter in der
+  installierten paho-Version nicht UND hätte ohne Timeout im Zweifel unbegrenzt blockiert.
+  Komplett auf `paho.mqtt.client` direkt umgestellt: `connect_async()` + `loop_start()` +
+  eigene Zeitlimit-Schleife (`while time.time() < deadline`), CONNACK-Fehler (falsche
+  Zugangsdaten etc.) werden jetzt als Klartext-Fehlermeldung zurückgegeben statt zu leeren
+  Ergebnissen zu führen.
 - **v0.8 (2026-09-18):** Root-Cause-Fix: `_resolve_mqtt_broker()` las die LoxBerry-SDK-Antwort
   unter den falschen Keys (`username`/`password` statt `brokeruser`/`brokerpass`) – Zugangsdaten
   wurden nie gefunden, Verbindung lief immer anonym. Komplett nach dem bewährten

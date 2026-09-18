@@ -5,6 +5,25 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.9] – 2026-09-18
+
+### Behoben – MQTT-Statuscheck konnte den Watchdog dauerhaft einfrieren (KRITISCH)
+- Nach dem Zugangsdaten-Fix (v0.8) zeigte der Live-Test einen neuen Fehler:
+  `simple() got an unexpected keyword argument 'timeout'` – die installierte paho-mqtt-Version
+  kennt diesen Parameter bei `subscribe.simple()` nicht. Schwerwiegender als der reine
+  Kompatibilitätsfehler: **ohne Timeout kann `subscribe.simple()` unbegrenzt blockieren**, falls
+  ein Topic nie eintrifft (falscher Präfix, Gateway offline, …) – das hätte den kompletten
+  Watchdog-Loop (inkl. Netbird-Check und Reboot-Logik!) dauerhaft einfrieren können.
+- Fix: `mqtt_read_retained()` komplett auf `paho.mqtt.client` direkt umgestellt (statt
+  `subscribe.simple()`), mit `connect_async()` + eigener Zeitlimit-Schleife – das Zeitlimit
+  wird dadurch auch bei einem hängenden DNS-Lookup/TCP-Handshake sicher durchgesetzt, nicht nur
+  beim Warten auf Nachrichten.
+- Nebeneffekt behoben: Ein abgelehntes CONNACK (falsche Zugangsdaten, RC 1–5) wird jetzt korrekt
+  als Fehlermeldung zurückgegeben statt als leeres, unerklärtes Ergebnis – vorher wäre das bei
+  der neuen Client-Implementierung sonst eine stille Regression gewesen.
+
+---
+
 ## [0.8] – 2026-09-18
 
 ### Behoben – MQTT-Zugangsdaten wurden nie tatsächlich verwendet (KRITISCH)
