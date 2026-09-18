@@ -52,11 +52,16 @@ Neustart-Schleife zu verfangen.
 
 - Überwacht Mosquitto-Broker **und** LoxBerry MQTT-Gateway – Status-Anzeige ist nicht einzeln
   abschaltbar, sobald die Funktion aktiv ist siehst du immer beide Zustände
-- Mosquitto: systemd-Dienststatus **und** echter TCP-Erreichbarkeitstest zum Broker-Port
-- MQTT-Gateway: systemd-Dienststatus **und** Best-Effort-Prüfung ob eine TCP-Verbindung zu
-  Mosquitto besteht (rein informativ, löst keine Aktion aus)
+- **Mosquitto:** läuft als systemd-Dienst – Dienststatus **und** echter TCP-Erreichbarkeitstest
+  zum Broker-Port
+- **MQTT-Gateway** (`mqttgateway.pl`): kein systemd-Dienst, sondern ein LoxBerry-Kern-Daemon –
+  Erkennung über Prozess-Suchmuster (`pgrep -f`) **und** den vom Gateway selbst veröffentlichten
+  MQTT-Verbindungsstatus (`<präfix>/status` + Herzschlag `<präfix>/keepaliveepoch`, sichtbar in
+  Loxone Config als MQTT Virtual Input `loxberry_mqttgateway_status`) – die zuverlässigste
+  verfügbare Quelle, da sie direkt vom Gateway kommt
 - Automatischer Neustart bei ungesundem Zustand ist **pro Dienst separat** ein-/ausschaltbar
-  (kein Reboot, kein Cooldown nötig – ein Dienst-Neustart reicht)
+  (kein Reboot, kein Cooldown nötig – ein Dienst-Neustart reicht). Beim Gateway wird nur
+  beendet, nicht selbst neu gestartet – das übernimmt LoxBerrys eigenes Watchdog-System
 - Nutzt dasselbe Prüfintervall wie Funktion 1
 
 ### Aktions-Historie
@@ -81,10 +86,11 @@ Der Daemon läuft als unprivilegierter `loxberry`-User. Alle root-pflichtigen Ak
 (Netbird-Status abfragen, Dienst neu starten, rebooten) laufen ausschließlich über ein
 separates Root-Helper-Skript (`netbird_watchdog_helper.sh`). Für Netbird (Funktion 1/2/3) gibt
 die `sudoers`-Regel **ausschließlich** feste, argumentlose Aufrufe frei – keine Wildcards.
-Zwei Ausnahmen (Funktion 4): `restart_service <name>` nimmt einen konfigurierbaren Dienstnamen
-entgegen, `link_check <pid> <port>` prüft rein lesend eine bestehende TCP-Verbindung. Beide
-Werte werden sowohl vom Daemon als auch vom Helper-Skript streng gegen ein numerisches bzw.
-Identifier-Muster validiert, bevor sie an `systemctl`/`ss` übergeben werden.
+Einzige Ausnahme: `restart_service <name>` (Funktion 4, Mosquitto) nimmt einen konfigurierbaren
+Dienstnamen entgegen, der sowohl vom Daemon als auch vom Helper-Skript streng gegen ein
+Identifier-Muster validiert wird, bevor er an `systemctl restart` übergeben wird. Das MQTT-Gateway
+läuft **nicht** über diesen Helper – da es unter demselben User (`loxberry`) läuft, genügen
+unprivilegierte `pgrep`/`pkill`, kein sudo nötig.
 
 ---
 

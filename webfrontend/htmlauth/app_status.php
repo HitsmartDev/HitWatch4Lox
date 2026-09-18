@@ -26,7 +26,7 @@ $f4_enabled = ($cfg['MQTT_WATCHDOG']['ENABLED'] ?? '0') == '1';
 $f4_mosq_autorestart = $f4_enabled && ($cfg['MQTT_WATCHDOG']['MOSQUITTO_AUTORESTART'] ?? '1') == '1';
 $f4_gw_autorestart   = $f4_enabled && ($cfg['MQTT_WATCHDOG']['GATEWAY_AUTORESTART'] ?? '0') == '1';
 $f4_mosq_service = $cfg['MQTT_WATCHDOG']['MOSQUITTO_SERVICE'] ?? 'mosquitto';
-$f4_gw_service   = $cfg['MQTT_WATCHDOG']['GATEWAY_SERVICE'] ?? 'mqttgateway';
+$f4_gw_pattern   = $cfg['MQTT_WATCHDOG']['GATEWAY_PROCESS_PATTERN'] ?? 'mqttgateway.pl';
 
 // ── Daemon-Status (PID-Check + Prozessname) ──
 $pidfile        = $lbplogdir . '/daemon.pid';
@@ -231,9 +231,9 @@ render_header('app_status');
                 <span class="sl-info-val" style="color:<?= $f4_mosq_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_mosq_autorestart ? 'An' : 'Aus' ?></span></li>
             <li><span class="sl-info-key">Neustarts gesamt</span> <span class="sl-info-val"><?= $m_restarts ?></span></li>
         </ul>
-        <div class="sl-section-title">📡 MQTT-Gateway (<?= h($f4_gw_service) ?>)</div>
+        <div class="sl-section-title">📡 MQTT-Gateway (<?= h($f4_gw_pattern) ?>)</div>
         <ul class="sl-info-list">
-            <li><span class="sl-info-key">Dienststatus</span>
+            <li><span class="sl-info-key">Prozess</span>
                 <span class="sl-info-val <?= $g_healthy ? 'ok' : 'alert' ?>"><?= h($g_active) ?><?= $g_sub ? ' / ' . h($g_sub) : '' ?></span></li>
             <li><span class="sl-info-key">Verbindung zu Mosquitto</span>
                 <span class="sl-info-val <?= $g_checked ? ($g_linked ? 'ok' : 'alert') : '' ?>">
@@ -243,10 +243,11 @@ render_header('app_status');
                 <span class="sl-info-val" style="color:<?= $f4_gw_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_gw_autorestart ? 'An' : 'Aus' ?></span></li>
             <li><span class="sl-info-key">Neustarts gesamt</span> <span class="sl-info-val"><?= $g_restarts ?></span></li>
         </ul>
-        <p class="sl-hint" style="margin-top:0.5rem">Dienststatus direkt von <code>systemctl show</code> (ActiveState / SubState) –
-            "activating" bedeutet der Dienst startet gerade bzw. verbindet noch. Die Verbindungsprüfung
-            Gateway→Mosquitto ist ein Best-Effort-Check (TCP-Verbindung des Gateway-Prozesses zum
-            Broker-Port) und rein informativ – sie löst selbst keinen Neustart aus.</p>
+        <p class="sl-hint" style="margin-top:0.5rem">Mosquitto-Dienststatus direkt von <code>systemctl show</code> (ActiveState / SubState) –
+            "activating" bedeutet der Dienst startet gerade. Das MQTT-Gateway ist kein systemd-Dienst
+            (LoxBerry-Kern-Daemon) – Prozess-Erkennung über <code>pgrep</code>, die Verbindung zu
+            Mosquitto liest den vom Gateway selbst veröffentlichten MQTT-Status
+            (<code>&lt;Präfix&gt;/status</code>). Rein informativ – löst selbst keinen Neustart aus.</p>
     </div>
 </div>
 <?php endif; ?>

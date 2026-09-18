@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '0.5'
+DAEMON_VERSION = '0.6'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -159,13 +159,21 @@ F4_MOSQUITTO_SERVICE    = get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_SERVICE', 'mosquit
 F4_MOSQUITTO_HOST       = get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_HOST', '127.0.0.1').strip() or '127.0.0.1'
 F4_MOSQUITTO_PORT       = int(get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_PORT', '1883') or '1883')
 F4_GATEWAY_AUTORESTART  = F4_ENABLED and get_cfg('MQTT_WATCHDOG', 'GATEWAY_AUTORESTART', '0') == '1'
-F4_GATEWAY_SERVICE      = get_cfg('MQTT_WATCHDOG', 'GATEWAY_SERVICE', 'mqttgateway').strip()
+# Das LoxBerry MQTT-Gateway (mqttgateway.pl) ist KEIN systemd-Dienst, sondern ein klassischer
+# Perl-Kern-Daemon (bestätigt per 'systemctl list-units' – dort taucht nur mosquitto.service auf,
+# 'pgrep -fa mqtt' zeigt aber den laufenden Prozess). Erkennung daher über Prozess-Suchmuster
+# (pgrep -f) statt Dienstname.
+F4_GATEWAY_PATTERN      = get_cfg('MQTT_WATCHDOG', 'GATEWAY_PROCESS_PATTERN', 'mqttgateway.pl').strip()
+# Das Gateway veröffentlicht seinen eigenen Verbindungsstatus + Herzschlag direkt als MQTT-Topics
+# (z.B. loxberry/mqttgateway/status = "Connected", .../keepaliveepoch = Unix-TS) – zuverlässiger
+# als jede externe Heuristik, da es die autoritative Selbstauskunft des Gateways ist.
+F4_GATEWAY_MQTT_PREFIX  = get_cfg('MQTT_WATCHDOG', 'GATEWAY_MQTT_PREFIX', 'loxberry/mqttgateway').strip() or 'loxberry/mqttgateway'
 if F4_ENABLED and not _valid_service_name(F4_MOSQUITTO_SERVICE):
     log.warning(f'MQTT_WATCHDOG.MOSQUITTO_SERVICE ungültig ({F4_MOSQUITTO_SERVICE!r}) – Fallback "mosquitto"')
     F4_MOSQUITTO_SERVICE = 'mosquitto'
-if F4_ENABLED and not _valid_service_name(F4_GATEWAY_SERVICE):
-    log.warning(f'MQTT_WATCHDOG.GATEWAY_SERVICE ungültig ({F4_GATEWAY_SERVICE!r}) – Fallback "mqttgateway"')
-    F4_GATEWAY_SERVICE = 'mqttgateway'
+if F4_ENABLED and (len(F4_GATEWAY_PATTERN) < 4 or len(F4_GATEWAY_PATTERN) > 128):
+    log.warning(f'MQTT_WATCHDOG.GATEWAY_PROCESS_PATTERN ungültig/zu kurz ({F4_GATEWAY_PATTERN!r}) – Fallback "mqttgateway.pl"')
+    F4_GATEWAY_PATTERN = 'mqttgateway.pl'
 
 _f3_weekdays_str = ','.join(str(w) for w in sorted(F3_WEEKDAYS))
 log.info(
@@ -175,12 +183,13 @@ log.info(
     f'(Tage {_f3_weekdays_str} um {F3_TIME}, alle {F3_EVERY_N}x) | '
     f'F4(MQTT-Watchdog)={"an" if F4_ENABLED else "aus"} '
     f'(Mosquitto={F4_MOSQUITTO_SERVICE}, Autorestart={"an" if F4_MOSQUITTO_AUTORESTART else "aus"} | '
-    f'Gateway={F4_GATEWAY_SERVICE}, Autorestart={"an" if F4_GATEWAY_AUTORESTART else "aus"}) | '
+    f'Gateway={F4_GATEWAY_PATTERN}, Autorestart={"an" if F4_GATEWAY_AUTORESTART else "aus"}) | '
     f'MQTT={"an" if MQTT_ENABLED else "aus"}'
 )
 
 try:
     import paho.mqtt.publish as mqtt_publish_mod
+    import paho.mqtt.subscribe as mqtt_subscribe_mod
     MQTT_OK = True
 except ImportError:
     MQTT_OK = False
@@ -316,30 +325,77 @@ def restart_service(service_name):
         return False
     return True
 
-def get_service_main_pid(service_name):
-    """Liest die Haupt-PID eines systemd-Dienstes (unprivilegiert lesbar)."""
+def get_process_state(pattern):
+    """Prüft per pgrep ob ein Prozess läuft, dessen Kommandozeile <pattern> enthält – für
+    Kern-Daemons wie das LoxBerry MQTT-Gateway (mqttgateway.pl), die KEIN systemd-Dienst sind
+    (bestätigt: 'systemctl list-units' zeigt nur mosquitto.service, aber 'pgrep -fa mqtt'
+    findet den laufenden Perl-Prozess). Root nicht nötig, pgrep ist für alle User lesbar."""
+    if len(pattern) < 4:  # Sicherheitsnetz: verhindert ein zu unspezifisches/leeres Muster
+        return {'running': False, 'pid': None}
     try:
-        r = subprocess.run(
-            ['systemctl', 'show', service_name, '--property=MainPID', '--value', '--no-pager'],
-            capture_output=True, text=True, timeout=10,
-        )
-        pid_str = r.stdout.strip()
-        return int(pid_str) if pid_str.isdigit() and int(pid_str) > 0 else None
+        r = subprocess.run(['pgrep', '-f', pattern], capture_output=True, text=True, timeout=10)
+        pids = [int(p) for p in r.stdout.split() if p.isdigit()]
+        return {'running': bool(pids), 'pid': pids[0] if pids else None}
     except Exception:
-        return None
+        return {'running': False, 'pid': None}
 
-def check_gateway_broker_link(gateway_service, broker_port):
-    """Best-effort-Prüfung: hat der Gateway-Prozess eine established TCP-Verbindung zum
-    Broker-Port? Basiert auf 'ss -tnp' über den Root-Helper (PID-Zuordnung braucht Root, da
-    Mosquitto/Gateway oft unter anderen System-Usern laufen). Rein informativ – löst keine
-    Aktion aus, nur Anzeige im Status-Tab."""
-    pid = get_service_main_pid(gateway_service)
-    if not pid:
-        return {'checked': False, 'linked': False, 'detail': 'Gateway-PID nicht ermittelbar (Dienst evtl. nicht aktiv)'}
-    rc, out, err = run_helper('link_check', args=[str(pid), str(broker_port)], timeout=10)
-    if rc == 0:
-        return {'checked': True, 'linked': True, 'detail': ''}
-    return {'checked': True, 'linked': False, 'detail': (err or out or '').strip()[:150]}
+def restart_process(pattern):
+    """Beendet einen Prozess per pkill (unprivilegiert – funktioniert nur wenn der Prozess
+    demselben User gehört wie dieser Daemon, üblich für LoxBerry-Kern-Skripte). HitWatch4Lox
+    startet den Prozess NICHT selbst neu: LoxBerrys eigenes Watchdog-System überwacht seine
+    Kern-Daemons (u.a. das MQTT-Gateway) und startet sie normalerweise automatisch neu – ein
+    von uns geratener Start-Befehl mit falschen Parametern/Environment wäre riskanter als das
+    Beenden dem etablierten LoxBerry-Mechanismus zu überlassen. Der Erfolg wird über eine
+    erneute Prüfung nach RESTART_WAIT festgestellt (siehe Aufrufer), nicht hier."""
+    if len(pattern) < 4:
+        log.error(f'Prozess-Neustart abgelehnt – Muster zu unspezifisch: {pattern!r}')
+        return False
+    try:
+        subprocess.run(['pkill', '-f', pattern], timeout=10)
+        return True
+    except Exception as e:
+        log.error(f'Prozess-Beenden fehlgeschlagen ({pattern}): {e}')
+        return False
+
+def mqtt_read_retained(topics, timeout=4):
+    """Liest den aktuellen (retained) Wert mehrerer MQTT-Topics per Kurzverbindung
+    (connect → subscribe → warten → disconnect). Fehlende/nicht erreichbare Topics fehlen
+    einfach im Ergebnis-Dict statt einen Fehler zu werfen – Aufrufer müssen mit leeren
+    Werten umgehen (z.B. falscher Topic-Präfix in der Config)."""
+    if not MQTT_OK:
+        return {}
+    try:
+        broker, port, user, passwd = _resolve_mqtt_broker()
+        auth = {'username': user, 'password': passwd} if user else None
+        msgs = mqtt_subscribe_mod.simple(
+            topics, hostname=broker, port=port, auth=auth,
+            msg_count=len(topics), timeout=timeout, retained=True,
+        )
+        if not isinstance(msgs, list):
+            msgs = [msgs]
+        return {m.topic: m.payload.decode('utf-8', 'replace') for m in msgs}
+    except Exception as e:
+        log.debug(f'MQTT: Retained-Werte konnten nicht gelesen werden: {e}')
+        return {}
+
+def check_gateway_mqtt_status(mqtt_prefix, max_age_s=900):
+    """Liest den vom LoxBerry MQTT-Gateway selbst veröffentlichten Verbindungsstatus
+    (<prefix>/status, z.B. 'Connected') sowie einen Herzschlag-Zeitstempel
+    (<prefix>/keepaliveepoch) – das Gateway ist damit seine eigene, autoritative Quelle für
+    "bin ich mit Mosquitto verbunden", zuverlässiger als jede externe Heuristik. Rein
+    informativ – löst selbst keine Aktion aus."""
+    vals = mqtt_read_retained([f'{mqtt_prefix}/status', f'{mqtt_prefix}/keepaliveepoch'])
+    status_topic = f'{mqtt_prefix}/status'
+    keepalive_topic = f'{mqtt_prefix}/keepaliveepoch'
+    if status_topic not in vals and keepalive_topic not in vals:
+        return {'checked': False, 'connected': False, 'stale': False, 'status_text': '', 'detail': 'Kein Wert unter diesem Topic-Präfix gefunden'}
+    status_text = vals.get(status_topic, '')
+    connected = status_text.strip().lower() == 'connected'
+    stale = False
+    keepalive_raw = vals.get(keepalive_topic, '')
+    if keepalive_raw.strip().isdigit():
+        stale = (time.time() - int(keepalive_raw.strip())) > max_age_s
+    return {'checked': True, 'connected': connected, 'stale': stale, 'status_text': status_text, 'detail': ''}
 
 # ---------------------------------------------------------------------------
 # Aktions-Historie: append-only Liste signifikanter Ereignisse (Neustarts, Reboots) für die
@@ -639,31 +695,55 @@ def run():
                         state['mosquitto_restart_count']      = int(state.get('mosquitto_restart_count', 0) or 0) + (1 if ok else 0)
                         log_action(state, 'mosquitto_restart', success=ok)
 
-                g = get_service_state(F4_GATEWAY_SERVICE)
-                link = check_gateway_broker_link(F4_GATEWAY_SERVICE, F4_MOSQUITTO_PORT)
-                state['gateway_active_state']  = g['active_state']
-                state['gateway_sub_state']     = g['sub_state']
-                state['gateway_healthy']       = g['healthy']
-                state['gateway_broker_checked'] = link['checked']
-                state['gateway_broker_linked']  = link['linked']
-                state['gateway_broker_detail']  = link['detail']
-                if not g['healthy']:
+                g = get_process_state(F4_GATEWAY_PATTERN)
+                mqtt_status = check_gateway_mqtt_status(F4_GATEWAY_MQTT_PREFIX)
+                gw_linked = mqtt_status['connected'] and not mqtt_status['stale']
+                # "Gesund" braucht den Prozess UND (falls prüfbar) eine frische "Connected"-
+                # Selbstauskunft des Gateways. Ist der Status-Topic (noch) nicht lesbar (falscher
+                # Präfix, MQTT aus, o.ä.), fällt die Bewertung auf die reine Prozessprüfung zurück.
+                gw_healthy = g['running'] and (not mqtt_status['checked'] or gw_linked)
+                state['gateway_running']        = g['running']
+                state['gateway_active_state']   = 'active' if g['running'] else 'inactive'
+                state['gateway_sub_state']      = 'running' if g['running'] else 'dead'
+                state['gateway_healthy']        = gw_healthy
+                state['gateway_broker_checked'] = mqtt_status['checked']
+                state['gateway_broker_linked']  = gw_linked
+                state['gateway_broker_detail']  = mqtt_status['detail'] or (
+                    'Herzschlag veraltet' if mqtt_status['checked'] and mqtt_status['stale'] else
+                    (f"Status: {mqtt_status['status_text']}" if mqtt_status['checked'] else '')
+                )
+                if not gw_healthy:
+                    # Wie bei Funktion 1: "läuft" allein reicht nicht – ein Prozess der lebt aber
+                    # laut eigener Selbstauskunft nicht mit Mosquitto verbunden ist, gilt ebenso
+                    # als ungesund und löst (bei aktivem Autorestart) einen Neustart aus.
+                    reason_txt = 'läuft nicht' if not g['running'] else f"läuft, aber nicht mit Mosquitto verbunden ({state['gateway_broker_detail']})"
                     log.warning(
-                        f"MQTT-Gateway ({F4_GATEWAY_SERVICE}) nicht gesund – Status: "
-                        f"{g['active_state']}/{g['sub_state']}"
-                        + (' – starte Dienst neu...' if F4_GATEWAY_AUTORESTART else ' – Autorestart deaktiviert, kein Neustart.')
+                        f"MQTT-Gateway ({F4_GATEWAY_PATTERN}) {reason_txt}"
+                        + (' – beende Prozess, LoxBerry startet Kern-Daemons üblicherweise selbst neu...'
+                           if F4_GATEWAY_AUTORESTART else ' – Autorestart deaktiviert, kein Neustart.')
                     )
                     if F4_GATEWAY_AUTORESTART:
-                        ok = restart_service(F4_GATEWAY_SERVICE)
+                        restart_process(F4_GATEWAY_PATTERN)
+                        time.sleep(RESTART_WAIT)
+                        g2 = get_process_state(F4_GATEWAY_PATTERN)
+                        # Erfolg wird bewusst nur am Prozess festgemacht: der Gateway-eigene
+                        # MQTT-Status könnte nach dem Neustart noch für einige Minuten den alten
+                        # (retained) Wert zeigen, bevor das Gateway neu publiziert – der nächste
+                        # reguläre Prüfzyklus aktualisiert gateway_broker_linked dann von selbst.
+                        ok = g2['running']
+                        state['gateway_running']      = g2['running']
+                        state['gateway_active_state'] = 'active' if ok else 'inactive'
+                        state['gateway_sub_state']    = 'running' if ok else 'dead'
+                        state['gateway_healthy']      = ok
                         state['gateway_last_restart_epoch'] = now
                         state['gateway_last_restart']       = fmt(now)
                         state['gateway_restart_count']      = int(state.get('gateway_restart_count', 0) or 0) + (1 if ok else 0)
-                        log_action(state, 'gateway_restart', success=ok)
-                elif link['checked'] and not link['linked']:
-                    log.warning(
-                        f"MQTT-Gateway ({F4_GATEWAY_SERVICE}) läuft, aber keine erkennbare "
-                        f"Verbindung zu Mosquitto ({F4_MOSQUITTO_HOST}:{F4_MOSQUITTO_PORT}): {link['detail']}"
-                    )
+                        log_action(
+                            state, 'gateway_restart', success=ok,
+                            detail='' if ok else 'LoxBerry hat den Dienst nicht automatisch neu gestartet – bitte manuell prüfen'
+                        )
+                        if not ok:
+                            log.error('MQTT-Gateway nach Beenden nicht automatisch neu gestartet – bitte manuell prüfen (z.B. LoxBerry neu starten)')
 
             # ---------------- Heartbeat / Persistenz ----------------
             if now - _last_heartbeat > HEARTBEAT_SECONDS:

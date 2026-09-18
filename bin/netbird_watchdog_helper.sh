@@ -8,13 +8,17 @@
 # festen Unterbefehlen. postroot.sh gibt in /etc/sudoers.d/hitwatch4lox NUR die exakten
 # Aufrufe frei (siehe dort).
 #
-# EINZIGE Ausnahmen mit einem vom Nutzer beeinflussten Argument:
-# - "restart_service <name>" (Funktion 4): Dienstname aus den Plugin-Einstellungen (je nach
-#   LoxBerry-Setup unterschiedlich). Wird hier UND vom Python-Daemon gegen ein striktes Muster
-#   (nur Buchstaben/Ziffern/._@-) validiert, bevor er an systemctl übergeben wird.
-# - "link_check <pid> <port>" (Funktion 4): rein lesende Prüfung ob eine established TCP-Verbindung
-#   vom gegebenen Prozess zum gegebenen Port existiert (ss -tnp). PID/Port sind rein numerisch und
-#   werden ebenfalls streng validiert. Kein Shell-Passthrough, keine Sonderzeichen, kein "ALL".
+# EINZIGE Ausnahme mit einem vom Nutzer beeinflussten Argument: "restart_service <name>"
+# (Funktion 4, Mosquitto). Dienstname aus den Plugin-Einstellungen (je nach LoxBerry-Setup
+# unterschiedlich). Wird hier UND vom Python-Daemon gegen ein striktes Muster (nur
+# Buchstaben/Ziffern/._@-) validiert, bevor er an systemctl übergeben wird. Kein
+# Shell-Passthrough, keine Sonderzeichen, kein "ALL" in sudoers.
+#
+# Das LoxBerry MQTT-Gateway (mqttgateway.pl) ist bewusst NICHT Teil dieses Root-Helpers – es
+# ist kein systemd-Dienst, sondern ein LoxBerry-Kern-Daemon. Der Python-Daemon prüft/beendet
+# ihn stattdessen unprivilegiert per pgrep/pkill (funktioniert weil er als loxberry-User läuft)
+# und liest seinen Verbindungsstatus direkt über die vom Gateway selbst veröffentlichten
+# MQTT-Topics – beides braucht kein Root.
 
 set -u
 
@@ -26,10 +30,6 @@ _find_netbird() {
 
 _valid_service_name() {
     [[ "$1" =~ ^[A-Za-z0-9_.@-]{1,64}$ ]]
-}
-
-_valid_number() {
-    [[ "$1" =~ ^[0-9]{1,10}$ ]]
 }
 
 case "$ACTION" in
@@ -84,26 +84,8 @@ case "$ACTION" in
         systemctl restart "$SVC"
         exit $?
         ;;
-    link_check)
-        PID="${2:-}"
-        PORT="${3:-}"
-        if ! _valid_number "$PID" || ! _valid_number "$PORT"; then
-            echo "Ungültige PID/Port: '${PID}' / '${PORT}'" >&2
-            exit 2
-        fi
-        if ! command -v ss >/dev/null 2>&1; then
-            echo "ss nicht verfügbar" >&2
-            exit 127
-        fi
-        # Established TCP-Verbindung vom gegebenen Prozess zum gegebenen Zielport? -p braucht
-        # Root um PIDs anderer User (z.B. mosquitto läuft oft als eigener System-User) zu sehen.
-        if ss -H -tnp state established "( dport = :${PORT} )" 2>/dev/null | grep -q "pid=${PID}[,)]"; then
-            exit 0
-        fi
-        exit 1
-        ;;
     *)
-        echo "Verwendung: $0 {check|restart|reboot|restart_service <name>|link_check <pid> <port>}" >&2
+        echo "Verwendung: $0 {check|restart|reboot|restart_service <name>}" >&2
         exit 1
         ;;
 esac

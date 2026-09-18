@@ -5,6 +5,36 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.6] – 2026-09-18
+
+### Behoben – MQTT-Gateway-Erkennung war grundlegend falsch
+- Live-Test auf echtem LoxBerry zeigte: Mosquitto korrekt erkannt, das MQTT-Gateway aber
+  dauerhaft "inactive/dead", obwohl es lief. Ursache: `systemctl list-units --type=service --all`
+  zeigt ausschließlich `mosquitto.service` – das LoxBerry MQTT-Gateway (`mqttgateway.pl`) ist
+  gar kein systemd-Dienst, sondern ein klassischer LoxBerry-Kern-Perl-Daemon.
+  `systemctl show <nicht-existente-Unit>` liefert dabei klaglos `ActiveState=inactive`/
+  `SubState=dead` zurück statt eines Fehlers, weshalb der Bug nicht als Fehler auffiel, sondern
+  einfach dauerhaft falsche Daten zeigte.
+- Fix: Gateway-Erkennung läuft jetzt über `pgrep -f` (konfigurierbares Prozess-Suchmuster,
+  Standard `mqttgateway.pl`) statt `systemctl`.
+
+### Geändert – Gateway↔Mosquitto-Verbindungsprüfung auf autoritative Quelle umgestellt
+- Der bisherige `ss -tnp`-basierte TCP-Verbindungscheck (v0.5) wurde ersetzt: das MQTT-Gateway
+  veröffentlicht seinen eigenen Verbindungsstatus direkt als MQTT-Topic (`<Präfix>/status`, z.B.
+  "Connected", plus Herzschlag `<Präfix>/keepaliveepoch`) – sichtbar in Loxone Config als MQTT
+  Virtual Input `loxberry_mqttgateway_status`. HitWatch4Lox liest diese Werte jetzt direkt statt
+  über eine externe Heuristik zu raten.
+- Der Root-Helper-Unterbefehl `link_check` (und die zugehörige sudoers-Ausnahme) wurde wieder
+  entfernt – nicht mehr gebraucht, da die MQTT-Statusabfrage kein Root benötigt. Reduziert die
+  Anzahl sudoers-Ausnahmen mit Nutzerargument von zwei auf eine (`restart_service`).
+- Automatischer Gateway-Neustart läuft jetzt unprivilegiert per `pkill` (kein sudo, da Gateway
+  unter demselben User wie der Daemon läuft) und wird ausgelöst wenn der Prozess entweder nicht
+  läuft ODER läuft aber laut eigener Selbstauskunft nicht mit Mosquitto verbunden ist – analog zu
+  Funktion 1. HitWatch4Lox startet den Prozess bewusst nicht selbst neu, sondern verlässt sich auf
+  LoxBerrys eigenes Watchdog-System für seine Kern-Daemons.
+
+---
+
 ## [0.5] – 2026-09-18
 
 ### Geändert – Funktion 4: Überwachung nicht mehr einzeln abschaltbar

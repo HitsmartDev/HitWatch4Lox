@@ -1,6 +1,6 @@
 ## 📌 Projekt-Status
-- **Version:** 0.5 (2026-09-18: Funktion 4 auf Nutzerwunsch überarbeitet – Autorestart statt
-  Überwachung schaltbar, Gateway↔Mosquitto-Verbindungscheck, Aktions-Historie neu)
+- **Version:** 0.6 (2026-09-18: Live-Diagnose auf echtem LoxBerry ergab, dass das MQTT-Gateway
+  KEIN systemd-Dienst ist – Funktion 4 Gateway-Erkennung grundlegend korrigiert)
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (ursprünglich reiner Netbird-Watchdog, jetzt
   auch MQTT-Dienste) vollständig gebaut, als Framework von Unwetter4Lox übernommen (gleiche
   LoxBerry-Plugin-Konventionen: PHP-Webfrontend im iframe-isolierten `sl-`-Komponenten-Stil,
@@ -54,29 +54,64 @@
      (Liste, gedeckelt auf 200 Einträge). Status-Tab zeigt die letzten 8 in einer neuen "Letzte
      Aktionen"-Karte, Log-Tab zeigt die volle Historie in einer Tabelle. Icon+Label-Mapping über
      `hw4l_action_label()` in `common.php` (von `app_status.php` UND `app_log.php` genutzt).
+- **v0.6 – Live-Diagnose auf Stefans LoxBerry (KRITISCHER Fund):** Nach Installation von v0.5 zeigte
+  der Status-Tab Mosquitto korrekt ("active/running", TCP erreichbar), aber das MQTT-Gateway
+  dauerhaft "inactive/dead" – Grund: `systemctl list-units --type=service --all | grep -i mqtt`
+  zeigt AUSSCHLIESSLICH `mosquitto.service`. `pgrep -fa mqtt` bestätigte, dass der Gateway-Prozess
+  (`/usr/bin/perl /opt/loxberry/sbin/mqttgateway.pl`) sehr wohl läuft – es ist einfach KEIN
+  systemd-Dienst, sondern ein LoxBerry-Kern-Daemon. `systemctl show` auf eine nicht-existente
+  Unit liefert klaglos `ActiveState=inactive`/`SubState=dead` zurück statt eines Fehlers – der
+  bisherige Code lief also nie auf einen Fehler, zeigte aber durchgehend falsche Daten.
+  **Fix (grundlegender Umbau der Gateway-Erkennung):**
+  1. **Prozess-Erkennung:** `get_process_state()` (`pgrep -f <GATEWAY_PROCESS_PATTERN>`, Default
+     `mqttgateway.pl`) ersetzt `get_service_state()`/`systemctl show` für das Gateway. Kein Root
+     nötig (pgrep für alle User lesbar).
+  2. **Verbindungsstatus – Nutzerhinweis führte zu einer BESSEREN Lösung als der ursprüngliche
+     `ss -tnp`-Ansatz:** Stefan entdeckte in der Loxone-Miniserver-Oberfläche (MQTT Virtual
+     Inputs), dass das Gateway seinen eigenen Verbindungsstatus DIREKT als MQTT-Topic
+     veröffentlicht (`loxberry_mqttgateway_status = "Connected"`, dazu ein
+     `loxberry_mqttgateway_keepaliveepoch`-Herzschlag). `check_gateway_mqtt_status()` liest jetzt
+     `<GATEWAY_MQTT_PREFIX>/status` + `/keepaliveepoch` (Default-Präfix `loxberry/mqttgateway` –
+     **noch nicht mit `mosquitto_sub -h localhost -t 'loxberry/mqttgateway/#' -v -C 8` verifiziert,
+     nur aus der Loxone-Anzeige abgeleitet!**) statt einer TCP-Heuristik zu vertrauen. Das ist die
+     autoritative Selbstauskunft des Gateways – zuverlässiger als jede externe Prüfung.
+  3. **`link_check`-Root-Helper-Subcommand komplett entfernt** (samt `_valid_number()`,
+     sudoers-Zeile) – nicht mehr gebraucht, da die MQTT-Statusabfrage kein Root braucht.
+     Reduziert die sudoers-Ausnahmen mit Nutzerargument von zwei auf eine (`restart_service`).
+  4. **Gateway-Neustart per `pkill`, unprivilegiert** (kein Root, da Gateway als `loxberry`-User
+     läuft wie der Daemon selbst) – `restart_process()`. HitWatch4Lox startet den Prozess bewusst
+     NICHT selbst neu (Risiko: falsche Start-Parameter für einen produktiven LoxBerry-Kerndienst),
+     sondern verlässt sich auf LoxBerrys eigenes Watchdog-System, das seine Kern-Daemons normalerweise
+     selbst respawnt. Erfolg wird nach `RESTART_WAIT` am wieder laufenden Prozess geprüft.
+  5. **Trigger-Bedingung erweitert:** Neustart-Versuch jetzt bei "läuft nicht" ODER "läuft, aber
+     laut MQTT-Status nicht mit Mosquitto verbunden" (vorher nur bei totem Prozess) – konsistent
+     mit Funktion 1s Philosophie (Prozess lebt ≠ tatsächlich verbunden).
 - **Noch offen:**
+  - [ ] **Exakten `loxberry/mqttgateway`-Topic-Pfad noch nicht verifiziert** – Stefan soll
+    `mosquitto_sub -h localhost -t 'loxberry/mqttgateway/#' -v -C 8` ausführen und das Ergebnis
+    teilen, damit `GATEWAY_MQTT_PREFIX` (Default aktuell nur eine plausible Annahme aus der
+    Loxone-UI-Anzeige) bestätigt oder korrigiert werden kann.
   - [ ] Nach diesem Umbau erneut auf echtem LoxBerry testen (Mehrfachauswahl-UI F3, Frequenz-Zähler
-    pro Wochentag, Fangfenster-Verhalten, Funktion 4 Autorestart-Logik, Gateway-Link-Check,
-    Aktions-Historie über mehrere Tage).
+    pro Wochentag, Fangfenster-Verhalten, Funktion 4 Gateway-Erkennung + Autorestart-Logik mit
+    echtem Topic-Präfix, Aktions-Historie über mehrere Tage).
   - [ ] Icons sind programmatisch generiert (einfaches Signal/Punkt-Motiv, navy/amber) – ggf.
     durch ein gestaltetes Icon ersetzen.
   - [ ] Keine automatisierten Tests vorhanden (anders als Unwetter4Lox mit `tests/test_daemon.py`)
     – bei Bedarf `tests/` mit `pytest` ergänzen, v.a. für `check_netbird()`-Parsing,
-    Cooldown-Logik, Frequenz-Zähler pro Wochentag, `get_service_state()`-Parsing und
-    `check_gateway_broker_link()`.
-  - [ ] Der offizielle Dienstname des LoxBerry MQTT-Gateways in aktuellen LoxBerry-Versionen ist
-    nicht verifiziert (Default-Vermutung `mqttgateway`) – Stefan muss das auf seinem System per
-    `systemctl list-units --type=service | grep -i mqtt` prüfen und ggf. in den Einstellungen anpassen.
-  - [ ] `ss -tnp`-basierter Link-Check ist ein Heuristik-Ansatz (established TCP-Verbindung vom
-    Gateway-Prozess zum Broker-Port) – falls das beim echten Test unzuverlässig ist (z.B. Gateway
-    hält mehrere Verbindungen, IPv6 statt IPv4), ggf. nachbessern.
+    Cooldown-Logik, Frequenz-Zähler pro Wochentag, `get_service_state()`/`get_process_state()`-
+    Parsing und `check_gateway_mqtt_status()`.
+  - [ ] pkill-basierter Gateway-Neustart setzt voraus, dass LoxBerrys eigenes Watchdog-System den
+    Prozess tatsächlich respawnt – diese Annahme ist plausibel (Standard-LoxBerry-Muster für
+    Kern-Daemons) aber NICHT verifiziert. Falls sich das beim echten Test als falsch herausstellt,
+    bliebe das Gateway nach einem Autorestart-Versuch dauerhaft down – ggf. muss HitWatch4Lox den
+    Prozess dann doch selbst neu starten (Start-Kommando müsste dafür sicher ermittelt werden).
 
 ---
 
 ## 🏗️ Architektur-Übersicht
 
 ### Daemon: `bin/hitwatch4lox_daemon.py`
-- Python-Daemon, ~690 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
+- Python-Daemon, ~770 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
   MQTT-Verbindung (keine RC=7-Reconnect-Problematik), da MQTT hier nur optionale,
   kurzlebige Statusveröffentlichung pro Zyklus ist (`paho.mqtt.publish.multiple`,
   connect→publish→disconnect).
@@ -87,11 +122,15 @@
   3. Funktion 3: heutiger ISO-Wochentag in `F3_WEEKDAYS`? → innerhalb Fangfenster (2×
      `CHECK_INTERVAL`, min. 10 min) nach `HH:MM`? → Zähler für diesen Wochentag hochzählen,
      bei `counter % EVERY_N == 0` auslösen (Cooldown-pflichtig wie F2)
-  4. Funktion 4: Status IMMER erheben (`get_service_state()` für Mosquitto + `tcp_check()`,
-     `get_service_state()` + `check_gateway_broker_link()` für Gateway) – Neustart nur wenn
-     die jeweilige `..._AUTORESTART`-Config an ist (kein Cooldown, kein Reboot, nur Dienst-Neustart)
+  4. Funktion 4: Status IMMER erheben – Mosquitto via `get_service_state()` (systemd) +
+     `tcp_check()`; Gateway via `get_process_state()` (`pgrep`, KEIN systemd) +
+     `check_gateway_mqtt_status()` (liest die vom Gateway selbst veröffentlichten MQTT-Topics).
+     Neustart nur wenn die jeweilige `..._AUTORESTART`-Config an ist (kein Cooldown, kein Reboot,
+     nur Dienst-/Prozess-Neustart; Gateway-Neustart via `restart_process()`/`pkill`, unprivilegiert)
   5. `log_action()` bei jedem Neustart/Reboot → `save_state()` + `mqtt_publish_status()` (unkritisch bei Fehlschlag)
-- Root-Aktionen laufen über `run_helper(action, args=None)` → `sudo netbird_watchdog_helper.sh {check|restart|reboot|restart_service <name>|link_check <pid> <port>}`
+- Root-Aktionen laufen über `run_helper(action, args=None)` → `sudo netbird_watchdog_helper.sh {check|restart|reboot|restart_service <name>}`
+  – NUR für Netbird + Mosquitto. Das MQTT-Gateway braucht kein Root (pgrep/pkill/MQTT-Read
+  funktionieren unprivilegiert, da Gateway und Daemon beide als `loxberry`-User laufen).
 
 ### Root-Helper: `bin/netbird_watchdog_helper.sh`
 - Kapselt privilegierte Aktionen hinter festen Unterbefehlen. `postroot.sh` gibt in
@@ -100,14 +139,13 @@
 - `restart`: `systemctl restart netbird` (Fallback `netbird service restart`)
 - `reboot`: `systemctl reboot` (Fallback `/sbin/reboot`) – **NIEMALS** wieder als Hintergrundjob
   (`... &`) umbauen, siehe Bugfix oben (Session-Cleanup killt verwaiste Hintergrundjobs).
-- `restart_service <name>` (Funktion 4, seit v0.4): sudoers-Zeile mit Argument (`restart_service *`).
-  Validiert `<name>` gegen `^[A-Za-z0-9_.@-]{1,64}$` (`_valid_service_name()` in Bash) BEVOR
-  `systemctl restart "$SVC"` läuft – zusätzlich validiert der Python-Daemon denselben Namen
-  schon vor dem Aufruf. Kein Shell-Passthrough (Array-Form in `subprocess.run`).
-- `link_check <pid> <port>` (Funktion 4, seit v0.5): sudoers-Zeile mit Argument (`link_check *`).
-  PID und Port rein numerisch, validiert gegen `^[0-9]{1,10}$` (`_valid_number()`). Führt
-  `ss -H -tnp state established "( dport = :<port> )"` aus und prüft per `grep` auf `pid=<pid>`.
-  Root nötig weil Mosquitto/Gateway oft unter anderen System-Usern laufen als `loxberry`.
+- `restart_service <name>` (Funktion 4, Mosquitto, seit v0.4): **einzige** sudoers-Zeile mit
+  Argument (`restart_service *`). Validiert `<name>` gegen `^[A-Za-z0-9_.@-]{1,64}$`
+  (`_valid_service_name()` in Bash) BEVOR `systemctl restart "$SVC"` läuft – zusätzlich validiert
+  der Python-Daemon denselben Namen schon vor dem Aufruf. Kein Shell-Passthrough (Array-Form in
+  `subprocess.run`).
+- `link_check` (v0.5) wieder entfernt in v0.6 – ersetzt durch die MQTT-Status-Topics des Gateways
+  selbst, kein Root mehr nötig für den Verbindungscheck.
 
 ### state.json Struktur (DATADIR)
 - `last_check_epoch`, `last_check`, `netbird_connected`, `netbird_management`, `netbird_signal`
@@ -118,9 +156,11 @@
   Aktivierung – Basis für die Frequenz-Auswertung `counter % EVERY_N == 0`)
 - `mosquitto_active_state`, `mosquitto_sub_state`, `mosquitto_tcp_ok`, `mosquitto_healthy`,
   `mosquitto_last_restart_epoch`, `mosquitto_last_restart`, `mosquitto_restart_count` (Funktion 4)
-- `gateway_active_state`, `gateway_sub_state`, `gateway_healthy`, `gateway_broker_checked`,
-  `gateway_broker_linked`, `gateway_broker_detail`, `gateway_last_restart_epoch`,
-  `gateway_last_restart`, `gateway_restart_count` (Funktion 4)
+- `gateway_running` (bool, aus `pgrep`), `gateway_active_state`/`gateway_sub_state` (synthetisch
+  "active"/"inactive" bzw. "running"/"dead" – KEIN echter systemd-Wert, nur zur UI-Konsistenz mit
+  Mosquitto), `gateway_healthy`, `gateway_broker_checked`, `gateway_broker_linked`,
+  `gateway_broker_detail`, `gateway_last_restart_epoch`, `gateway_last_restart`,
+  `gateway_restart_count` (Funktion 4)
 - `action_log` (Liste, max. 200 Einträge, neueste am Ende – `{epoch, time, action, success,
   detail}`; `action` ∈ `netbird_restart`/`mosquitto_restart`/`gateway_restart`/`netbird_watchdog`/
   `scheduled_reboot`; PHP zeigt sie umgekehrt/neueste zuerst via `array_reverse()`)
@@ -170,7 +210,7 @@ nötig (kein Standort erforderlich) – `ajax.php` daher deutlich schlanker als 
 | `app_status.php` | Netbird-Status, Watchdog-Aktionen, **Letzte Aktionen** (neu, letzte 8 aus `action_log`), Cooldown-Anzeige, MQTT-Dienste-Status (Funktion 4, mit Gateway↔Broker-Link), Funktionen-Übersicht, Daemon-Controls |
 | `app_settings.php` | F1/F2/F3/F4-Toggles + Parameter, F2-Toggle per JS gesperrt wenn F1 aus, F4-Autorestart-Toggles (nicht mehr "Überwachung") gesperrt wenn F4 aus, F3 Wochentags-Chips (Mehrfachauswahl) + Frequenz-Select, MQTT-Karte |
 | `app_log.php` | **Aktions-Historie** (neu, volle `action_log`-Tabelle bis 200 Einträge) oberhalb der bisherigen Log-Session-Liste |
-| `app_help.php` | Die vier Funktionen, Aktions-Historie-Erklärung, Cooldown-/Fangfenster-Erklärung, Sicherheits-/sudoers-Hinweis (inkl. `restart_service`- und `link_check`-Ausnahme), MQTT-Referenz, FAQ |
+| `app_help.php` | Die vier Funktionen, Aktions-Historie-Erklärung, Cooldown-/Fangfenster-Erklärung, Sicherheits-/sudoers-Hinweis (inkl. `restart_service`-Ausnahme), MQTT-Referenz, FAQ |
 
 `.sl-chip` / `.sl-chip-grid` CSS (Wochentags-Mehrfachauswahl) wurde aus dem Unwetter4Lox-Vorbild
 zurückgeholt, nachdem es beim ersten Trimmen der Komponentenbibliothek entfernt worden war.
@@ -181,6 +221,15 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v0.6 (2026-09-18):** Live-Diagnose ergab: MQTT-Gateway (`mqttgateway.pl`) ist kein
+  systemd-Dienst (nur `mosquitto.service` existiert), sondern ein LoxBerry-Kern-Daemon –
+  `systemctl show` lieferte für die nie existierende "mqttgateway"-Unit klaglos
+  `inactive`/`dead` zurück statt eines Fehlers, UI zeigte daher dauerhaft falsche Daten.
+  Fix: Prozess-Erkennung via `pgrep -f` (`GATEWAY_PROCESS_PATTERN`, Default `mqttgateway.pl`),
+  Verbindungsstatus über die vom Gateway selbst veröffentlichten MQTT-Topics
+  (`GATEWAY_MQTT_PREFIX/status` + `/keepaliveepoch`, Default `loxberry/mqttgateway` – **noch
+  nicht verifiziert**) statt TCP-Heuristik. `link_check`-Root-Helper-Subcommand entfernt (nicht
+  mehr gebraucht), Gateway-Neustart jetzt unprivilegiert per `pkill` (kein sudo).
 - **v0.5 (2026-09-18):** Funktion 4 überarbeitet – `MOSQUITTO_ENABLED`/`GATEWAY_ENABLED` (steuerten
   Anzeige+Neustart zusammen) ersetzt durch `MOSQUITTO_AUTORESTART`/`GATEWAY_AUTORESTART` (nur noch
   Neustart; Status wird immer angezeigt sobald F4 an ist). Neuer Gateway↔Mosquitto-Verbindungscheck

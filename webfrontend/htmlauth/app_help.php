@@ -87,17 +87,35 @@ Die Status-Anzeige ist <b>nicht einzeln abschaltbar</b> – sobald Funktion 4 ak
 immer den Zustand beider Dienste. Separat schaltbar ist nur, ob ein ungesunder Dienst
 <b>automatisch neu gestartet</b> wird (gleiches Prinzip wie Funktion 1, nur für MQTT statt
 Netbird – ein Versuch pro Erkennungszyklus, kein Cooldown/Reboot-Eskalation nötig).</p>
-<p><b>Mosquitto-Broker:</b> Prüft sowohl den systemd-Dienststatus (<code>systemctl show</code>,
-ActiveState/SubState) als auch eine echte TCP-Verbindung zum konfigurierten Broker-Port.
-Ein Prozess, der laut systemd noch "aktiv" ist aber keine Verbindungen mehr annimmt (hängender
-Broker), wird so trotzdem als ungesund erkannt.</p>
-<p><b>MQTT-Gateway:</b> Prüft den systemd-Dienststatus <b>und</b> zusätzlich, ob der
-Gateway-Prozess eine bestehende TCP-Verbindung zu Mosquitto hat ("Verbindung zu Mosquitto" im
-Status-Tab) – ein Best-Effort-Check über <code>ss -tnp</code>, rein informativ und löst selbst
-keinen Neustart aus. Automatischer Neustart ist standardmäßig deaktiviert, da der genaue
-Dienstname je nach LoxBerry-Version variieren kann – vor dem Aktivieren empfiehlt sich ein
-Check per SSH: <code>systemctl list-units --type=service | grep -i mqtt</code>.</p>
-<p>Beide Dienstnamen sind in den Einstellungen frei konfigurierbar.</p>
+<p><b>Mosquitto-Broker:</b> läuft als regulärer systemd-Dienst. Prüft sowohl den
+Dienststatus (<code>systemctl show</code>, ActiveState/SubState) als auch eine echte
+TCP-Verbindung zum konfigurierten Broker-Port. Ein Prozess, der laut systemd noch "aktiv" ist
+aber keine Verbindungen mehr annimmt (hängender Broker), wird so trotzdem als ungesund erkannt.
+Automatischer Neustart läuft über <code>systemctl restart</code>.</p>
+<p><b>MQTT-Gateway:</b> Das LoxBerry MQTT-Gateway (<code>mqttgateway.pl</code>) ist <b>kein</b>
+systemd-Dienst, sondern ein LoxBerry-Kern-Daemon – <code>systemctl</code> kennt es schlicht
+nicht. Die Erkennung läuft daher über zwei unabhängige Wege:</p>
+<ul>
+<li><b>Prozess-Erkennung:</b> <code>pgrep -f</code> mit einem konfigurierbaren Suchmuster
+(Standard <code>mqttgateway.pl</code>) – läuft der Prozess überhaupt?</li>
+<li><b>Verbindungsstatus:</b> Das Gateway veröffentlicht seinen eigenen Verbindungszustand direkt
+als MQTT-Topic (<code>&lt;Präfix&gt;/status</code>, z.B. "Connected", plus einen Herzschlag
+<code>&lt;Präfix&gt;/keepaliveepoch</code>) – sichtbar in Loxone Config als MQTT Virtual Input
+<code>loxberry_mqttgateway_status</code>. HitWatch4Lox liest diese Werte direkt statt sie zu
+erraten – die zuverlässigste verfügbare Quelle, da sie vom Gateway selbst kommt. Ein veralteter
+Herzschlag (Standard &gt; 15 Min.) gilt ebenfalls als "nicht verbunden".</li>
+</ul>
+<p>Ein Neustart-Versuch wird ausgelöst, wenn der Prozess entweder <b>gar nicht läuft</b> ODER
+<b>läuft, aber laut eigener Selbstauskunft nicht mit Mosquitto verbunden ist</b> – genau wie bei
+Funktion 1 reicht "der Prozess lebt" allein nicht. Automatischer Neustart des Gateways
+funktioniert dann anders als bei Mosquitto: HitWatch4Lox beendet den Prozess (<code>pkill</code>),
+startet ihn aber bewusst <b>nicht selbst neu</b> – das erledigt LoxBerrys eigenes Watchdog-System
+für seine Kern-Daemons zuverlässiger als ein von uns geratener Start-Befehl mit möglicherweise
+falschen Parametern. Der Erfolg wird nach kurzer Wartezeit am wieder laufenden Prozess erneut
+geprüft (der MQTT-Verbindungsstatus kann noch etwas länger den alten Wert zeigen, bis das Gateway
+neu publiziert) und im Log/der Aktions-Historie vermerkt. Standardmäßig deaktiviert – vor dem
+Aktivieren empfiehlt sich ein Blick in die Aktions-Historie nach einem
+manuellen Test.</p>
 </div>
 </details>
 
@@ -152,14 +170,17 @@ laufen ausschließlich über ein separates Root-Helper-Skript (<code>netbird_wat
 Funktion 1/2/3) gibt die <code>sudoers</code>-Regel (unter <code>/etc/sudoers.d/hitwatch4lox</code>,
 von <code>postroot.sh</code> angelegt) <b>ausschließlich</b> diese exakten, argumentlosen Aufrufe
 frei – kein <code>ALL</code>, keine Wildcards.</p>
-<p><b>Einzige Ausnahme:</b> <code>restart_service &lt;name&gt;</code> (Funktion 4, Mosquitto/
-MQTT-Gateway) nimmt einen vom Nutzer in den Einstellungen konfigurierten Dienstnamen entgegen,
-da dieser je nach LoxBerry-Setup unterschiedlich ist. Sowohl der Python-Daemon als auch das
-Helper-Skript selbst validieren den Namen streng (nur Buchstaben, Ziffern sowie
-<code>._@-</code>, max. 64 Zeichen) bevor er an <code>systemctl restart</code> übergeben wird –
-kein Shell-Passthrough, keine Sonderzeichen. Die <code>sudoers</code>-Zeile dafür lautet
-<code>restart_service *</code>, ist damit aber weiterhin auf genau diesen einen validierten
-Befehl beschränkt, nicht auf beliebige sudo-Kommandos.</p>
+<p><b>Einzige Ausnahme:</b> <code>restart_service &lt;name&gt;</code> (Funktion 4, Mosquitto)
+nimmt einen vom Nutzer in den Einstellungen konfigurierten Dienstnamen entgegen, da dieser je
+nach LoxBerry-Setup unterschiedlich ist. Sowohl der Python-Daemon als auch das Helper-Skript
+selbst validieren den Namen streng (nur Buchstaben, Ziffern sowie <code>._@-</code>, max. 64
+Zeichen) bevor er an <code>systemctl restart</code> übergeben wird – kein Shell-Passthrough,
+keine Sonderzeichen. Die <code>sudoers</code>-Zeile dafür lautet <code>restart_service *</code>,
+ist damit aber weiterhin auf genau diesen einen validierten Befehl beschränkt, nicht auf
+beliebige sudo-Kommandos.</p>
+<p>Das MQTT-Gateway läuft <b>nicht</b> über diesen Root-Helper: Da es unter demselben User wie
+der Daemon (<code>loxberry</code>) läuft, genügen unprivilegierte <code>pgrep</code>/<code>pkill</code>
+– kein sudo, kein zusätzlicher sudoers-Eintrag nötig.</p>
 </div>
 </details>
 
@@ -185,14 +206,15 @@ pro Prüfzyklus erfolgt, nicht als Dauerverbindung.</p>
 <tr><td><code>last_reboot_reason</code></td><td>Text</td><td><code>netbird_watchdog</code> oder <code>scheduled_reboot</code></td></tr>
 <tr><td><code>cooldown_active</code></td><td>0 / 1</td><td>Reboot-Cooldown aktuell aktiv</td></tr>
 <tr><td><code>cooldown_remaining_min</code></td><td>Minuten</td><td>Verbleibende Cooldown-Zeit</td></tr>
-<tr><td><code>mosquitto/healthy</code></td><td>0 / 1</td><td>Nur wenn Funktion 4 + Mosquitto-Überwachung aktiv</td></tr>
+<tr><td><code>mosquitto/healthy</code></td><td>0 / 1</td><td>Nur wenn Funktion 4 aktiv – Dienststatus + TCP-Check kombiniert</td></tr>
 <tr><td><code>mosquitto/active_state</code></td><td>Text</td><td>systemd ActiveState (active/activating/failed/…)</td></tr>
 <tr><td><code>mosquitto/sub_state</code></td><td>Text</td><td>systemd SubState (running/start/…)</td></tr>
 <tr><td><code>mosquitto/restart_count</code></td><td>Zahl</td><td>Mosquitto-Neustarts seit Daemon-Start</td></tr>
-<tr><td><code>gateway/healthy</code></td><td>0 / 1</td><td>Nur wenn Funktion 4 + Gateway-Überwachung aktiv</td></tr>
-<tr><td><code>gateway/active_state</code></td><td>Text</td><td>systemd ActiveState des MQTT-Gateways</td></tr>
-<tr><td><code>gateway/sub_state</code></td><td>Text</td><td>systemd SubState des MQTT-Gateways</td></tr>
-<tr><td><code>gateway/restart_count</code></td><td>Zahl</td><td>Gateway-Neustarts seit Daemon-Start</td></tr>
+<tr><td><code>gateway/healthy</code></td><td>0 / 1</td><td>Nur wenn Funktion 4 aktiv – Prozess läuft + (falls prüfbar) mit Mosquitto verbunden</td></tr>
+<tr><td><code>gateway/active_state</code></td><td>Text</td><td>"active"/"inactive" – synthetisch aus <code>pgrep</code>, kein echter systemd-Status</td></tr>
+<tr><td><code>gateway/sub_state</code></td><td>Text</td><td>"running"/"dead" – synthetisch aus <code>pgrep</code></td></tr>
+<tr><td><code>gateway/restart_count</code></td><td>Zahl</td><td>Gateway-Neustarts (Prozess beendet, LoxBerry respawnt) seit Daemon-Start</td></tr>
+<tr><td><code>gateway/broker_linked</code></td><td>0 / 1</td><td>Gateway meldet selbst "Connected" zu Mosquitto (aus dessen eigenem MQTT-Status-Topic)</td></tr>
 </tbody></table>
 </div>
 </details>

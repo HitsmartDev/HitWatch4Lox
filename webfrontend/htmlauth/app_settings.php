@@ -27,15 +27,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $mqtt_en = isset($_POST['mqtt_enabled']) ? '1' : '0';
         $use_lb_new = isset($_POST['use_lb_mqtt']) ? '1' : '0';
 
-        // Dienstnamen: nur Buchstaben/Ziffern/._@- (wird an sudo systemctl restart übergeben) –
-        // ungültige Eingaben fallen auf den Standardwert zurück statt einen Fehler zu zeigen.
+        // Mosquitto-Dienstname: nur Buchstaben/Ziffern/._@- (wird an sudo systemctl restart
+        // übergeben) – ungültige Eingaben fallen auf den Standardwert zurück statt einen Fehler
+        // zu zeigen. Gateway ist kein systemd-Dienst (siehe unten) und läuft nie über sudo.
         $svc_re = '/^[A-Za-z0-9_.@-]{1,64}$/';
         $mosq_service = trim($_POST['f4_mosquitto_service'] ?? 'mosquitto');
         if (!preg_match($svc_re, $mosq_service)) $mosq_service = 'mosquitto';
-        $gw_service = trim($_POST['f4_gateway_service'] ?? 'mqttgateway');
-        if (!preg_match($svc_re, $gw_service)) $gw_service = 'mqttgateway';
         $mosq_host = strip_tags(trim($_POST['f4_mosquitto_host'] ?? '127.0.0.1')) ?: '127.0.0.1';
         $mosq_port = max(1, min(65535, intval($_POST['f4_mosquitto_port'] ?? 1883)));
+
+        // Gateway-Prozessmuster (pgrep -f) und MQTT-Status-Topic-Präfix: großzügigeres Muster,
+        // da Skript-Pfade/-Namen erlaubt sein müssen; Mindestlänge 4 verhindert ein zu
+        // unspezifisches pkill-Muster.
+        $pattern_re = '/^[A-Za-z0-9_.\/-]{4,128}$/';
+        $gw_pattern = trim($_POST['f4_gateway_pattern'] ?? 'mqttgateway.pl');
+        if (!preg_match($pattern_re, $gw_pattern)) $gw_pattern = 'mqttgateway.pl';
+        $gw_mqtt_prefix = trim($_POST['f4_gateway_mqtt_prefix'] ?? 'loxberry/mqttgateway', " \t\n\r\0\x0B/");
+        if ($gw_mqtt_prefix === '') $gw_mqtt_prefix = 'loxberry/mqttgateway';
 
         // Mehrere Wochentage: Checkboxen f3_weekday_1..f3_weekday_7 (ISO: 1=Mo .. 7=So)
         $weekdays = [];
@@ -73,7 +81,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $c .= "MOSQUITTO_HOST={$mosq_host}\n";
         $c .= "MOSQUITTO_PORT={$mosq_port}\n";
         $c .= "GATEWAY_AUTORESTART={$f4_gw_auto}\n";
-        $c .= "GATEWAY_SERVICE={$gw_service}\n\n";
+        $c .= "GATEWAY_PROCESS_PATTERN={$gw_pattern}\n";
+        $c .= "GATEWAY_MQTT_PREFIX={$gw_mqtt_prefix}\n\n";
 
         $c .= "[MQTT]\n";
         $c .= "ENABLED={$mqtt_en}\n";
@@ -286,10 +295,20 @@ render_header('app_settings');
         </div>
         <hr>
         <div class="sl-field">
-            <label for="f4_gateway_service">MQTT-Gateway – Dienstname (systemd)</label>
-            <input type="text" id="f4_gateway_service" name="f4_gateway_service" value="<?= cv('MQTT_WATCHDOG','GATEWAY_SERVICE','mqttgateway') ?>">
-            <p class="sl-hint">Der Standardwert ist eine Annahme – bitte vor dem Aktivieren des
-                automatischen Neustarts den korrekten Namen für dein System prüfen.</p>
+            <label for="f4_gateway_pattern">MQTT-Gateway – Prozess-Suchmuster (pgrep -f)</label>
+            <input type="text" id="f4_gateway_pattern" name="f4_gateway_pattern" value="<?= cv('MQTT_WATCHDOG','GATEWAY_PROCESS_PATTERN','mqttgateway.pl') ?>">
+            <p class="sl-hint">Das LoxBerry MQTT-Gateway (<code>mqttgateway.pl</code>) ist kein
+                systemd-Dienst, sondern ein LoxBerry-Kern-Daemon – die Erkennung läuft daher über
+                einen Prozess-Suchmuster-Abgleich statt über <code>systemctl</code>.</p>
+        </div>
+        <div class="sl-field">
+            <label for="f4_gateway_mqtt_prefix">MQTT-Gateway – Status-Topic-Präfix</label>
+            <input type="text" id="f4_gateway_mqtt_prefix" name="f4_gateway_mqtt_prefix" value="<?= cv('MQTT_WATCHDOG','GATEWAY_MQTT_PREFIX','loxberry/mqttgateway') ?>">
+            <p class="sl-hint">Das Gateway veröffentlicht seinen eigenen Verbindungsstatus unter
+                <code>&lt;Präfix&gt;/status</code> (z.B. "Connected") und einen Herzschlag unter
+                <code>&lt;Präfix&gt;/keepaliveepoch</code> – sichtbar in Loxone Config als MQTT
+                Virtual Input <code>loxberry_mqttgateway_status</code>. Wird für die Anzeige
+                "Verbindung zu Mosquitto" im Status-Tab genutzt (rein informativ).</p>
         </div>
         <div class="sl-field">
             <div class="sl-toggle-wrap">
@@ -299,8 +318,10 @@ render_header('app_settings');
                 </label>
                 <span class="sl-toggle-label">MQTT-Gateway automatisch neu starten</span>
             </div>
-            <p class="sl-hint">Standardmäßig deaktiviert, da ein falscher Dienstname sonst wiederholt
-                sinnlose Neustart-Versuche auslösen würde. Status wird trotzdem immer angezeigt.</p>
+            <p class="sl-hint">Standardmäßig deaktiviert. HitWatch4Lox beendet den Prozess bei
+                Bedarf, startet ihn aber bewusst NICHT selbst neu – das übernimmt LoxBerrys
+                eigenes Watchdog-System für seine Kern-Daemons. Der Erfolg wird nach kurzer
+                Wartezeit erneut geprüft.</p>
         </div>
     </div>
 </div>
