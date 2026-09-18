@@ -82,22 +82,41 @@ spätere Neustart des Daemons am selben Tag erneut einen überfälligen Reboot a
 <details class="sl-details-nested">
 <summary>Funktion 4 – MQTT-Dienste-Watchdog</summary>
 <div class="sl-details-body">
-<p>Überwacht Mosquitto-Broker und/oder das LoxBerry MQTT-Gateway unabhängig voneinander
-(Prüfintervall = Funktion 1) und startet den jeweiligen Dienst bei Bedarf <b>einmalig</b> neu –
-gleiches Prinzip wie Funktion 1, nur für MQTT statt Netbird.</p>
+<p>Überwacht Mosquitto-Broker <b>und</b> das LoxBerry MQTT-Gateway (Prüfintervall = Funktion 1).
+Die Status-Anzeige ist <b>nicht einzeln abschaltbar</b> – sobald Funktion 4 aktiv ist, siehst du
+immer den Zustand beider Dienste. Separat schaltbar ist nur, ob ein ungesunder Dienst
+<b>automatisch neu gestartet</b> wird (gleiches Prinzip wie Funktion 1, nur für MQTT statt
+Netbird – ein Versuch pro Erkennungszyklus, kein Cooldown/Reboot-Eskalation nötig).</p>
 <p><b>Mosquitto-Broker:</b> Prüft sowohl den systemd-Dienststatus (<code>systemctl show</code>,
 ActiveState/SubState) als auch eine echte TCP-Verbindung zum konfigurierten Broker-Port.
 Ein Prozess, der laut systemd noch "aktiv" ist aber keine Verbindungen mehr annimmt (hängender
 Broker), wird so trotzdem als ungesund erkannt.</p>
-<p><b>MQTT-Gateway:</b> Prüft nur den systemd-Dienststatus. Standardmäßig deaktiviert, da der
-genaue Dienstname je nach LoxBerry-Version variieren kann – vor dem Aktivieren empfiehlt sich
-ein Check per SSH: <code>systemctl list-units --type=service | grep -i mqtt</code>.</p>
-<p>Beide Dienstnamen sind in den Einstellungen frei konfigurierbar. <b>Kein Cooldown/Reboot-
-Eskalation für Funktion 4</b> – ein Dienst-Neustart gilt hier als ausreichend; anders als bei
-Funktion 1/2 gibt es keine Kopplung an einen Systemneustart.</p>
+<p><b>MQTT-Gateway:</b> Prüft den systemd-Dienststatus <b>und</b> zusätzlich, ob der
+Gateway-Prozess eine bestehende TCP-Verbindung zu Mosquitto hat ("Verbindung zu Mosquitto" im
+Status-Tab) – ein Best-Effort-Check über <code>ss -tnp</code>, rein informativ und löst selbst
+keinen Neustart aus. Automatischer Neustart ist standardmäßig deaktiviert, da der genaue
+Dienstname je nach LoxBerry-Version variieren kann – vor dem Aktivieren empfiehlt sich ein
+Check per SSH: <code>systemctl list-units --type=service | grep -i mqtt</code>.</p>
+<p>Beide Dienstnamen sind in den Einstellungen frei konfigurierbar.</p>
 </div>
 </details>
 
+</div>
+</details>
+
+<!-- ================================================================
+     AKTIONS-HISTORIE
+     ================================================================ -->
+<details class="sl-details">
+<summary>📋 Letzte Aktionen &amp; Aktions-Historie</summary>
+<div class="sl-details-body">
+<p>Der Status-Tab zeigt eine Karte "Letzte Aktionen" mit den letzten 8 signifikanten Ereignissen
+(Dienst-Neustarts, ausgelöste Reboots) inkl. Zeitpunkt und Erfolg/Fehlschlag. Über den Link
+"Vollständige Aktions-Historie ansehen" gelangst du zum Log-Tab, der die komplette Historie
+(bis zu 200 Einträge) in einer durchsuchbaren Tabelle zeigt.</p>
+<p>Diese strukturierte Historie ist unabhängig von den rohen Text-Logdateien (Log-Sessions,
+weiter unten auf derselben Seite) – sie wird in <code>state.json</code> gespeichert und übersteht
+damit auch einen Neustart des Daemons.</p>
 </div>
 </details>
 

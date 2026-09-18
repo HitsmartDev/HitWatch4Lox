@@ -50,11 +50,20 @@ Neustart-Schleife zu verfangen.
 
 ### 4. MQTT-Dienste-Watchdog (optional)
 
-- Überwacht Mosquitto-Broker und/oder LoxBerry MQTT-Gateway unabhängig voneinander
+- Überwacht Mosquitto-Broker **und** LoxBerry MQTT-Gateway – Status-Anzeige ist nicht einzeln
+  abschaltbar, sobald die Funktion aktiv ist siehst du immer beide Zustände
 - Mosquitto: systemd-Dienststatus **und** echter TCP-Erreichbarkeitstest zum Broker-Port
-- MQTT-Gateway: systemd-Dienststatus (Dienstname konfigurierbar, da versionsabhängig)
-- Startet den jeweiligen Dienst bei Bedarf einmalig neu – kein Reboot, kein Cooldown nötig
+- MQTT-Gateway: systemd-Dienststatus **und** Best-Effort-Prüfung ob eine TCP-Verbindung zu
+  Mosquitto besteht (rein informativ, löst keine Aktion aus)
+- Automatischer Neustart bei ungesundem Zustand ist **pro Dienst separat** ein-/ausschaltbar
+  (kein Reboot, kein Cooldown nötig – ein Dienst-Neustart reicht)
 - Nutzt dasselbe Prüfintervall wie Funktion 1
+
+### Aktions-Historie
+
+Der Status-Tab zeigt eine Karte "Letzte Aktionen" mit den letzten 8 Ereignissen (Dienst-Neustarts,
+ausgelöste Reboots, jeweils mit Erfolg/Fehlschlag). Der Log-Tab zeigt die vollständige Historie
+(bis zu 200 Einträge) in einer durchsuchbaren Tabelle – unabhängig von den rohen Text-Logdateien.
 
 ### Schutz vor Boot-Loops (Cooldown)
 
@@ -72,9 +81,10 @@ Der Daemon läuft als unprivilegierter `loxberry`-User. Alle root-pflichtigen Ak
 (Netbird-Status abfragen, Dienst neu starten, rebooten) laufen ausschließlich über ein
 separates Root-Helper-Skript (`netbird_watchdog_helper.sh`). Für Netbird (Funktion 1/2/3) gibt
 die `sudoers`-Regel **ausschließlich** feste, argumentlose Aufrufe frei – keine Wildcards.
-Einzige Ausnahme: `restart_service <name>` (Funktion 4) nimmt einen konfigurierbaren
-Dienstnamen entgegen, der sowohl vom Daemon als auch vom Helper-Skript streng gegen ein
-Identifier-Muster validiert wird, bevor er an `systemctl restart` übergeben wird.
+Zwei Ausnahmen (Funktion 4): `restart_service <name>` nimmt einen konfigurierbaren Dienstnamen
+entgegen, `link_check <pid> <port>` prüft rein lesend eine bestehende TCP-Verbindung. Beide
+Werte werden sowohl vom Daemon als auch vom Helper-Skript streng gegen ein numerisches bzw.
+Identifier-Muster validiert, bevor sie an `systemctl`/`ss` übergeben werden.
 
 ---
 

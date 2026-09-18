@@ -5,6 +5,33 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.5] – 2026-09-18
+
+### Geändert – Funktion 4: Überwachung nicht mehr einzeln abschaltbar
+- `[MQTT_WATCHDOG] MOSQUITTO_ENABLED`/`GATEWAY_ENABLED` (steuerten bisher Anzeige **und**
+  Neustart gemeinsam) ersetzt durch `MOSQUITTO_AUTORESTART`/`GATEWAY_AUTORESTART` (steuern nur
+  noch den automatischen Neustart). Status von Mosquitto **und** MQTT-Gateway wird jetzt immer
+  angezeigt, sobald `[MQTT_WATCHDOG] ENABLED=1` – unabhängig davon, ob automatisch neu gestartet
+  werden soll.
+
+### Hinzugefügt – Gateway↔Mosquitto-Verbindungscheck
+- Neue Best-Effort-Prüfung, ob das MQTT-Gateway tatsächlich mit Mosquitto verbunden ist (nicht
+  nur ob der Gateway-Dienst läuft): ermittelt die Haupt-PID des Gateway-Dienstes und prüft über
+  den Root-Helper (`ss -tnp`), ob eine established TCP-Verbindung zum Broker-Port besteht.
+  Rein informativ im Status-Tab ("Verbindung zu Mosquitto") – löst selbst keine Aktion aus.
+- Root-Helper um `link_check <pid> <port>` erweitert, PID/Port streng numerisch validiert
+  (zweite und letzte sudoers-Ausnahme mit Nutzerargument im Plugin, neben `restart_service`).
+
+### Hinzugefügt – Aktions-Historie ("Letzte Aktionen")
+- Jeder signifikante Vorfall (Netbird-Dienst-Neustart, Mosquitto-Neustart, Gateway-Neustart,
+  ausgelöster Reboot) wird jetzt mit Zeitstempel, Erfolg/Fehlschlag und Detailtext in
+  `state.json` protokolliert (max. 200 Einträge).
+- Neue Karte "Letzte Aktionen" im Status-Tab zeigt die letzten 8 Ereignisse auf einen Blick.
+- Der Log-Tab zeigt zusätzlich zu den bisherigen rohen Log-Sessions jetzt eine vollständige,
+  durchsuchbare Aktions-Historie-Tabelle (bis zu 200 Einträge).
+
+---
+
 ## [0.4] – 2026-09-18
 
 ### Hinzugefügt – Funktion 4: MQTT-Dienste-Watchdog

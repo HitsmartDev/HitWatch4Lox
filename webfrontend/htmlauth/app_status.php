@@ -23,8 +23,8 @@ $f3_weekdays = array_filter(array_map('trim', explode(',', $cfg['SCHEDULED_REBOO
 $f3_time    = $cfg['SCHEDULED_REBOOT']['TIME'] ?? '04:00';
 $f3_every_n = (int)($cfg['SCHEDULED_REBOOT']['EVERY_N'] ?? 1);
 $f4_enabled = ($cfg['MQTT_WATCHDOG']['ENABLED'] ?? '0') == '1';
-$f4_mosq_enabled = $f4_enabled && ($cfg['MQTT_WATCHDOG']['MOSQUITTO_ENABLED'] ?? '1') == '1';
-$f4_gw_enabled   = $f4_enabled && ($cfg['MQTT_WATCHDOG']['GATEWAY_ENABLED'] ?? '0') == '1';
+$f4_mosq_autorestart = $f4_enabled && ($cfg['MQTT_WATCHDOG']['MOSQUITTO_AUTORESTART'] ?? '1') == '1';
+$f4_gw_autorestart   = $f4_enabled && ($cfg['MQTT_WATCHDOG']['GATEWAY_AUTORESTART'] ?? '0') == '1';
 $f4_mosq_service = $cfg['MQTT_WATCHDOG']['MOSQUITTO_SERVICE'] ?? 'mosquitto';
 $f4_gw_service   = $cfg['MQTT_WATCHDOG']['GATEWAY_SERVICE'] ?? 'mqttgateway';
 
@@ -101,10 +101,7 @@ if ($last_reboot_epoch > 0) {
 $age      = time() - $last_check_epoch;
 $is_stale = ($f1_enabled && $daemon_running && $last_check_epoch > 0 && $age > ($check_interval * 2 + 60));
 
-$reason_labels = [
-    'netbird_watchdog' => 'Netbird-Watchdog (Funktion 2)',
-    'scheduled_reboot' => 'Automatischer Reboot (Funktion 3)',
-];
+$action_log = array_reverse($state['action_log'] ?? []); // neueste zuerst
 
 render_header('app_status');
 ?>
@@ -158,8 +155,8 @@ render_header('app_status');
             <li><span class="sl-info-key">Letzter Dienst-Neustart</span> <span class="sl-info-val"><?= h($last_restart) ?></span></li>
             <li><span class="sl-info-key">Dienst-Neustarts gesamt</span> <span class="sl-info-val"><?= $restart_count ?></span></li>
             <li><span class="sl-info-key">Letzter automatischer Reboot</span> <span class="sl-info-val <?= $last_reboot_epoch ? 'warn' : '' ?>"><?= h($last_reboot) ?></span></li>
-            <?php if ($last_reboot_reason): ?>
-            <li><span class="sl-info-key">Grund</span> <span class="sl-info-val"><?= h($reason_labels[$last_reboot_reason] ?? $last_reboot_reason) ?></span></li>
+            <?php if ($last_reboot_reason): [$_ric, $_rlb] = hw4l_action_label($last_reboot_reason); ?>
+            <li><span class="sl-info-key">Grund</span> <span class="sl-info-val"><?= $_ric ?> <?= h($_rlb) ?></span></li>
             <?php endif; ?>
         </ul>
         <?php if ($cooldown_remaining_s > 0): ?>
@@ -171,7 +168,38 @@ render_header('app_status');
     </div>
 </div>
 
-<?php if ($f4_mosq_enabled || $f4_gw_enabled): ?>
+<!-- ================================================================
+     LETZTE AKTIONEN
+     ================================================================ -->
+<div class="sl-card">
+    <div class="sl-card-head">
+        <span class="sl-card-head-title">📋 Letzte Aktionen</span>
+    </div>
+    <div class="sl-card-body">
+<?php if (empty($action_log)): ?>
+        <p class="sl-hint">Noch keine Aktionen protokolliert.</p>
+<?php else: ?>
+        <ul class="sl-info-list">
+<?php foreach (array_slice($action_log, 0, 8) as $entry):
+    [$_aic, $_alb] = hw4l_action_label($entry['action'] ?? '');
+    $_asuccess = (bool)($entry['success'] ?? true);
+    $_atime = $entry['time'] ?? '–';
+    $_adetail = $entry['detail'] ?? '';
+?>
+            <li>
+                <span class="sl-info-key"><?= $_aic ?> <?= h($_alb) ?><?php if ($_adetail): ?><br><span style="font-size:0.72rem;color:var(--muted)"><?= h($_adetail) ?></span><?php endif; ?></span>
+                <span class="sl-info-val <?= $_asuccess ? '' : 'alert' ?>"><?= h($_atime) ?><?= $_asuccess ? '' : ' ⚠' ?></span>
+            </li>
+<?php endforeach; ?>
+        </ul>
+        <p class="sl-hint" style="margin-top:0.6rem;text-align:right">
+            <a href="app_log.php" style="color:inherit;font-weight:700">→ Vollständige Aktions-Historie ansehen</a>
+        </p>
+<?php endif; ?>
+    </div>
+</div>
+
+<?php if ($f4_enabled): ?>
 <!-- ================================================================
      MQTT-DIENSTE-STATUS
      ================================================================ -->
@@ -180,33 +208,45 @@ render_header('app_status');
         <span class="sl-card-head-title">📡 MQTT-Dienste-Status</span>
     </div>
     <div class="sl-card-body">
-        <ul class="sl-info-list">
-<?php if ($f4_mosq_enabled):
-    $m_active = $state['mosquitto_active_state'] ?? '?';
-    $m_sub    = $state['mosquitto_sub_state'] ?? '';
-    $m_tcp    = (bool)($state['mosquitto_tcp_ok'] ?? false);
-    $m_healthy= (bool)($state['mosquitto_healthy'] ?? false);
+<?php
+    $m_active   = $state['mosquitto_active_state'] ?? '?';
+    $m_sub      = $state['mosquitto_sub_state'] ?? '';
+    $m_tcp      = (bool)($state['mosquitto_tcp_ok'] ?? false);
+    $m_healthy  = (bool)($state['mosquitto_healthy'] ?? false);
     $m_restarts = (int)($state['mosquitto_restart_count'] ?? 0);
+    $g_active   = $state['gateway_active_state'] ?? '?';
+    $g_sub      = $state['gateway_sub_state'] ?? '';
+    $g_healthy  = (bool)($state['gateway_healthy'] ?? false);
+    $g_restarts = (int)($state['gateway_restart_count'] ?? 0);
+    $g_checked  = (bool)($state['gateway_broker_checked'] ?? false);
+    $g_linked   = (bool)($state['gateway_broker_linked'] ?? false);
 ?>
-            <li><span class="sl-info-key">Mosquitto (<?= h($f4_mosq_service) ?>)</span>
+        <div class="sl-section-title">🦟 Mosquitto (<?= h($f4_mosq_service) ?>)</div>
+        <ul class="sl-info-list">
+            <li><span class="sl-info-key">Dienststatus</span>
                 <span class="sl-info-val <?= $m_healthy ? 'ok' : 'alert' ?>"><?= h($m_active) ?><?= $m_sub ? ' / ' . h($m_sub) : '' ?></span></li>
             <li><span class="sl-info-key">TCP-Erreichbarkeit</span>
                 <span class="sl-info-val <?= $m_tcp ? 'ok' : 'alert' ?>"><?= $m_tcp ? 'erreichbar' : 'nicht erreichbar' ?></span></li>
-            <li><span class="sl-info-key">Mosquitto-Neustarts</span> <span class="sl-info-val"><?= $m_restarts ?></span></li>
-<?php endif; ?>
-<?php if ($f4_gw_enabled):
-    $g_active = $state['gateway_active_state'] ?? '?';
-    $g_sub    = $state['gateway_sub_state'] ?? '';
-    $g_healthy= (bool)($state['gateway_healthy'] ?? false);
-    $g_restarts = (int)($state['gateway_restart_count'] ?? 0);
-?>
-            <li><span class="sl-info-key">MQTT-Gateway (<?= h($f4_gw_service) ?>)</span>
-                <span class="sl-info-val <?= $g_healthy ? 'ok' : 'alert' ?>"><?= h($g_active) ?><?= $g_sub ? ' / ' . h($g_sub) : '' ?></span></li>
-            <li><span class="sl-info-key">Gateway-Neustarts</span> <span class="sl-info-val"><?= $g_restarts ?></span></li>
-<?php endif; ?>
+            <li><span class="sl-info-key">Automatischer Neustart</span>
+                <span class="sl-info-val" style="color:<?= $f4_mosq_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_mosq_autorestart ? 'An' : 'Aus' ?></span></li>
+            <li><span class="sl-info-key">Neustarts gesamt</span> <span class="sl-info-val"><?= $m_restarts ?></span></li>
         </ul>
-        <p class="sl-hint" style="margin-top:0.5rem">Zustand direkt von <code>systemctl show</code> (ActiveState / SubState) –
-            "activating" bedeutet der Dienst startet gerade bzw. verbindet noch.</p>
+        <div class="sl-section-title">📡 MQTT-Gateway (<?= h($f4_gw_service) ?>)</div>
+        <ul class="sl-info-list">
+            <li><span class="sl-info-key">Dienststatus</span>
+                <span class="sl-info-val <?= $g_healthy ? 'ok' : 'alert' ?>"><?= h($g_active) ?><?= $g_sub ? ' / ' . h($g_sub) : '' ?></span></li>
+            <li><span class="sl-info-key">Verbindung zu Mosquitto</span>
+                <span class="sl-info-val <?= $g_checked ? ($g_linked ? 'ok' : 'alert') : '' ?>">
+                    <?= $g_checked ? ($g_linked ? 'verbunden' : 'nicht verbunden') : 'nicht prüfbar' ?>
+                </span></li>
+            <li><span class="sl-info-key">Automatischer Neustart</span>
+                <span class="sl-info-val" style="color:<?= $f4_gw_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_gw_autorestart ? 'An' : 'Aus' ?></span></li>
+            <li><span class="sl-info-key">Neustarts gesamt</span> <span class="sl-info-val"><?= $g_restarts ?></span></li>
+        </ul>
+        <p class="sl-hint" style="margin-top:0.5rem">Dienststatus direkt von <code>systemctl show</code> (ActiveState / SubState) –
+            "activating" bedeutet der Dienst startet gerade bzw. verbindet noch. Die Verbindungsprüfung
+            Gateway→Mosquitto ist ein Best-Effort-Check (TCP-Verbindung des Gateway-Prozesses zum
+            Broker-Port) und rein informativ – sie löst selbst keinen Neustart aus.</p>
     </div>
 </div>
 <?php endif; ?>

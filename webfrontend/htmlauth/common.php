@@ -41,6 +41,18 @@ function h(?string $s): string {
     return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+// Aktions-Historie: Icon + Label je Aktionstyp (state.json 'action_log' + last_auto_reboot_reason)
+function hw4l_action_label(string $action): array {
+    static $map = [
+        'netbird_restart'  => ['🐦', 'Netbird-Dienst neugestartet'],
+        'mosquitto_restart'=> ['🦟', 'Mosquitto neugestartet'],
+        'gateway_restart'  => ['📡', 'MQTT-Gateway neugestartet'],
+        'netbird_watchdog' => ['🔄', 'Reboot ausgelöst – Netbird-Watchdog (Funktion 2)'],
+        'scheduled_reboot' => ['🗓️', 'Reboot ausgelöst – Automatischer Reboot (Funktion 3)'],
+    ];
+    return $map[$action] ?? ['❔', $action];
+}
+
 function render_header(string $active): void
 {
     global $L, $PLUGIN_VERSION, $lbpplugindir;

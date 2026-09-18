@@ -8,11 +8,13 @@
 # festen Unterbefehlen. postroot.sh gibt in /etc/sudoers.d/hitwatch4lox NUR die exakten
 # Aufrufe frei (siehe dort).
 #
-# EINZIGE Ausnahme: "restart_service <name>" (Funktion 4, Mosquitto/MQTT-Gateway) nimmt einen
-# vom Nutzer in den Plugin-Einstellungen konfigurierten Dienstnamen entgegen, da dieser je nach
-# LoxBerry-Setup unterschiedlich sein kann. Der Name wird hier UND zusätzlich vom Python-Daemon
-# gegen ein striktes Muster (nur Buchstaben/Ziffern/._@-) validiert, bevor er an systemctl
-# übergeben wird – kein Shell-Passthrough, keine Sonderzeichen, kein "ALL" in sudoers.
+# EINZIGE Ausnahmen mit einem vom Nutzer beeinflussten Argument:
+# - "restart_service <name>" (Funktion 4): Dienstname aus den Plugin-Einstellungen (je nach
+#   LoxBerry-Setup unterschiedlich). Wird hier UND vom Python-Daemon gegen ein striktes Muster
+#   (nur Buchstaben/Ziffern/._@-) validiert, bevor er an systemctl übergeben wird.
+# - "link_check <pid> <port>" (Funktion 4): rein lesende Prüfung ob eine established TCP-Verbindung
+#   vom gegebenen Prozess zum gegebenen Port existiert (ss -tnp). PID/Port sind rein numerisch und
+#   werden ebenfalls streng validiert. Kein Shell-Passthrough, keine Sonderzeichen, kein "ALL".
 
 set -u
 
@@ -24,6 +26,10 @@ _find_netbird() {
 
 _valid_service_name() {
     [[ "$1" =~ ^[A-Za-z0-9_.@-]{1,64}$ ]]
+}
+
+_valid_number() {
+    [[ "$1" =~ ^[0-9]{1,10}$ ]]
 }
 
 case "$ACTION" in
@@ -78,8 +84,26 @@ case "$ACTION" in
         systemctl restart "$SVC"
         exit $?
         ;;
+    link_check)
+        PID="${2:-}"
+        PORT="${3:-}"
+        if ! _valid_number "$PID" || ! _valid_number "$PORT"; then
+            echo "Ungültige PID/Port: '${PID}' / '${PORT}'" >&2
+            exit 2
+        fi
+        if ! command -v ss >/dev/null 2>&1; then
+            echo "ss nicht verfügbar" >&2
+            exit 127
+        fi
+        # Established TCP-Verbindung vom gegebenen Prozess zum gegebenen Zielport? -p braucht
+        # Root um PIDs anderer User (z.B. mosquitto läuft oft als eigener System-User) zu sehen.
+        if ss -H -tnp state established "( dport = :${PORT} )" 2>/dev/null | grep -q "pid=${PID}[,)]"; then
+            exit 0
+        fi
+        exit 1
+        ;;
     *)
-        echo "Verwendung: $0 {check|restart|reboot|restart_service <name>}" >&2
+        echo "Verwendung: $0 {check|restart|reboot|restart_service <name>|link_check <pid> <port>}" >&2
         exit 1
         ;;
 esac

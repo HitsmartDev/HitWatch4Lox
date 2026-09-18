@@ -5,6 +5,12 @@ require_once 'common.php';
 
 $L = LBSystem::readlanguage('language.ini');
 
+// ── Aktions-Historie laden ──
+$state = [];
+$sf    = $lbpdatadir . '/state.json';
+if (file_exists($sf)) $state = json_decode(file_get_contents($sf), true) ?? [];
+$action_log = array_reverse($state['action_log'] ?? []); // neueste zuerst
+
 // ── Log-Dateien suchen ──
 $pluginDataDir = (isset($lbpdatadir) && $lbpdatadir)
     ? $lbpdatadir
@@ -53,6 +59,49 @@ if ($raw_sess) {
 
 render_header('app_log');
 ?>
+
+<!-- ================================================================
+     AKTIONS-HISTORIE
+     ================================================================ -->
+<div class="sl-card">
+    <div class="sl-card-head"><span class="sl-card-head-title">📋 Aktions-Historie</span></div>
+    <div class="sl-card-body">
+<?php if (empty($action_log)): ?>
+        <p class="sl-hint">Noch keine Aktionen protokolliert.</p>
+<?php else: ?>
+        <p class="sl-hint" style="margin:0 0 0.6rem">
+            <b><?= count($action_log) ?></b> Einträge (max. 200 werden aufbewahrt), neueste zuerst.
+        </p>
+        <div style="overflow-x:auto;max-height:420px;overflow-y:auto">
+        <table class="sl-log-list">
+            <thead>
+                <tr>
+                    <th>Zeitpunkt</th>
+                    <th>Aktion</th>
+                    <th>Ergebnis</th>
+                    <th>Detail</th>
+                </tr>
+            </thead>
+            <tbody>
+<?php foreach ($action_log as $entry):
+    [$_aic, $_alb] = hw4l_action_label($entry['action'] ?? '');
+    $_asuccess = (bool)($entry['success'] ?? true);
+    $_atime = $entry['time'] ?? '–';
+    $_adetail = $entry['detail'] ?? '';
+?>
+                <tr>
+                    <td style="white-space:nowrap;color:var(--muted)"><?= h($_atime) ?></td>
+                    <td><?= $_aic ?> <?= h($_alb) ?></td>
+                    <td><span class="sl-badge <?= $_asuccess ? 'ok' : 'err' ?>"><?= $_asuccess ? 'OK' : 'Fehler' ?></span></td>
+                    <td style="color:var(--muted);font-size:0.78rem"><?= h($_adetail) ?></td>
+                </tr>
+<?php endforeach; ?>
+            </tbody>
+        </table>
+        </div>
+<?php endif; ?>
+    </div>
+</div>
 
 <?php if (empty($allsessions)): ?>
 <div class="sl-card">

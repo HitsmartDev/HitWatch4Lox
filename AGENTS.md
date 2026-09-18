@@ -1,5 +1,6 @@
 ## 📌 Projekt-Status
-- **Version:** 0.4 (2026-09-18: vierte Funktion – MQTT-Dienste-Watchdog – auf Nutzerwunsch ergänzt)
+- **Version:** 0.5 (2026-09-18: Funktion 4 auf Nutzerwunsch überarbeitet – Autorestart statt
+  Überwachung schaltbar, Gateway↔Mosquitto-Verbindungscheck, Aktions-Historie neu)
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (ursprünglich reiner Netbird-Watchdog, jetzt
   auch MQTT-Dienste) vollständig gebaut, als Framework von Unwetter4Lox übernommen (gleiche
   LoxBerry-Plugin-Konventionen: PHP-Webfrontend im iframe-isolierten `sl-`-Komponenten-Stil,
@@ -33,30 +34,49 @@
   `systemctl show <service> --property=ActiveState,SubState` statt nur `is-active`, damit Status-Tab
   den vollen Zustand zeigen kann (Nutzerwunsch: "soll auch den Status anzeigen, Joining usw.") –
   z.B. "activating/start" während ein Dienst noch hochfährt/verbindet, nicht nur ein Boolean.
-  Mosquitto zusätzlich mit echtem TCP-Connect-Test (kein reiner Prozess-Check). Dienstnamen sind
-  frei konfigurierbar (Text-Feld), da sie je nach LoxBerry-Setup variieren – das ist die **einzige**
-  Stelle im ganzen Plugin, an der ein sudoers-Eintrag ein vom Nutzer kommendes Argument akzeptiert
-  (`restart_service *`); Name wird in Python UND im Helper-Skript gegen `^[A-Za-z0-9_.@-]{1,64}$`
-  validiert, siehe Sicherheits-Abschnitt unten. Status-Checks selbst brauchen kein Root
-  (`systemctl show`/`is-active` sind für alle User lesbar) – nur `restart_service` läuft über sudo.
+  Mosquitto zusätzlich mit echtem TCP-Connect-Test (kein reiner Prozess-Check). Status-Checks
+  selbst brauchen kein Root (`systemctl show`/`is-active` sind für alle User lesbar) – nur
+  `restart_service` läuft über sudo.
+- **v0.5 – Funktion 4 auf erneuten Nutzerwunsch überarbeitet (drei Punkte in einer Anfrage):**
+  1. **Überwachung nicht mehr einzeln abschaltbar:** `MOSQUITTO_ENABLED`/`GATEWAY_ENABLED`
+     (steuerten bisher SOWOHL Anzeige ALS AUCH Neustart) ersetzt durch `MOSQUITTO_AUTORESTART`/
+     `GATEWAY_AUTORESTART` (steuern NUR noch den automatischen Neustart). Status beider Dienste
+     wird jetzt immer erhoben und angezeigt sobald `MQTT_WATCHDOG.ENABLED=1` – Nutzer wollte
+     Sichtbarkeit nicht abschalten können müssen, nur die automatische Aktion.
+  2. **Gateway↔Mosquitto-Verbindungscheck neu:** `check_gateway_broker_link()` – ermittelt die
+     MainPID des Gateway-Dienstes (`systemctl show --property=MainPID`, unprivilegiert), prüft
+     dann über den Root-Helper (`link_check <pid> <port>`, `ss -tnp state established`) ob eine
+     TCP-Verbindung zu Mosquitto besteht. Best-Effort/informativ – KEINE Aktion daran gekoppelt.
+     Dies ist die zweite (und letzte) sudoers-Ausnahme mit Nutzerargument im Plugin, PID/Port
+     sind aber rein numerisch und werden streng validiert (`_valid_number()` im Helper).
+  3. **Aktions-Historie neu:** `log_action(state, action, success, detail)` schreibt jeden
+     signifikanten Vorfall (Dienst-Neustart, ausgelöster Reboot) in `state['action_log']`
+     (Liste, gedeckelt auf 200 Einträge). Status-Tab zeigt die letzten 8 in einer neuen "Letzte
+     Aktionen"-Karte, Log-Tab zeigt die volle Historie in einer Tabelle. Icon+Label-Mapping über
+     `hw4l_action_label()` in `common.php` (von `app_status.php` UND `app_log.php` genutzt).
 - **Noch offen:**
   - [ ] Nach diesem Umbau erneut auf echtem LoxBerry testen (Mehrfachauswahl-UI F3, Frequenz-Zähler
-    pro Wochentag, Fangfenster-Verhalten, Funktion 4 mit echtem Mosquitto/Gateway-Ausfall).
+    pro Wochentag, Fangfenster-Verhalten, Funktion 4 Autorestart-Logik, Gateway-Link-Check,
+    Aktions-Historie über mehrere Tage).
   - [ ] Icons sind programmatisch generiert (einfaches Signal/Punkt-Motiv, navy/amber) – ggf.
     durch ein gestaltetes Icon ersetzen.
   - [ ] Keine automatisierten Tests vorhanden (anders als Unwetter4Lox mit `tests/test_daemon.py`)
     – bei Bedarf `tests/` mit `pytest` ergänzen, v.a. für `check_netbird()`-Parsing,
-    Cooldown-Logik, Frequenz-Zähler pro Wochentag und `get_service_state()`-Parsing.
+    Cooldown-Logik, Frequenz-Zähler pro Wochentag, `get_service_state()`-Parsing und
+    `check_gateway_broker_link()`.
   - [ ] Der offizielle Dienstname des LoxBerry MQTT-Gateways in aktuellen LoxBerry-Versionen ist
     nicht verifiziert (Default-Vermutung `mqttgateway`) – Stefan muss das auf seinem System per
     `systemctl list-units --type=service | grep -i mqtt` prüfen und ggf. in den Einstellungen anpassen.
+  - [ ] `ss -tnp`-basierter Link-Check ist ein Heuristik-Ansatz (established TCP-Verbindung vom
+    Gateway-Prozess zum Broker-Port) – falls das beim echten Test unzuverlässig ist (z.B. Gateway
+    hält mehrere Verbindungen, IPv6 statt IPv4), ggf. nachbessern.
 
 ---
 
 ## 🏗️ Architektur-Übersicht
 
 ### Daemon: `bin/hitwatch4lox_daemon.py`
-- Python-Daemon, ~620 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
+- Python-Daemon, ~690 Zeilen. Deutlich einfacher als Unwetter4Lox – keine dauerhafte
   MQTT-Verbindung (keine RC=7-Reconnect-Problematik), da MQTT hier nur optionale,
   kurzlebige Statusveröffentlichung pro Zyklus ist (`paho.mqtt.publish.multiple`,
   connect→publish→disconnect).
@@ -67,10 +87,11 @@
   3. Funktion 3: heutiger ISO-Wochentag in `F3_WEEKDAYS`? → innerhalb Fangfenster (2×
      `CHECK_INTERVAL`, min. 10 min) nach `HH:MM`? → Zähler für diesen Wochentag hochzählen,
      bei `counter % EVERY_N == 0` auslösen (Cooldown-pflichtig wie F2)
-  4. Funktion 4: `get_service_state()` für Mosquitto (+ `tcp_check()`) und/oder Gateway,
-     bei nicht gesund → `restart_service()` (kein Cooldown, kein Reboot – nur Dienst-Neustart)
-  5. `save_state()` + `mqtt_publish_status()` (unkritisch bei Fehlschlag)
-- Root-Aktionen laufen über `run_helper(action, arg=None)` → `sudo netbird_watchdog_helper.sh {check|restart|reboot|restart_service <name>}`
+  4. Funktion 4: Status IMMER erheben (`get_service_state()` für Mosquitto + `tcp_check()`,
+     `get_service_state()` + `check_gateway_broker_link()` für Gateway) – Neustart nur wenn
+     die jeweilige `..._AUTORESTART`-Config an ist (kein Cooldown, kein Reboot, nur Dienst-Neustart)
+  5. `log_action()` bei jedem Neustart/Reboot → `save_state()` + `mqtt_publish_status()` (unkritisch bei Fehlschlag)
+- Root-Aktionen laufen über `run_helper(action, args=None)` → `sudo netbird_watchdog_helper.sh {check|restart|reboot|restart_service <name>|link_check <pid> <port>}`
 
 ### Root-Helper: `bin/netbird_watchdog_helper.sh`
 - Kapselt privilegierte Aktionen hinter festen Unterbefehlen. `postroot.sh` gibt in
@@ -79,10 +100,14 @@
 - `restart`: `systemctl restart netbird` (Fallback `netbird service restart`)
 - `reboot`: `systemctl reboot` (Fallback `/sbin/reboot`) – **NIEMALS** wieder als Hintergrundjob
   (`... &`) umbauen, siehe Bugfix oben (Session-Cleanup killt verwaiste Hintergrundjobs).
-- `restart_service <name>` (Funktion 4, seit v0.4): **einzige** sudoers-Zeile mit Argument
-  (`restart_service *`). Validiert `<name>` gegen `^[A-Za-z0-9_.@-]{1,64}$` (`_valid_service_name()`
-  in Bash) BEVOR `systemctl restart "$SVC"` läuft – zusätzlich validiert der Python-Daemon
-  denselben Namen schon vor dem Aufruf. Kein Shell-Passthrough (Array-Form in `subprocess.run`).
+- `restart_service <name>` (Funktion 4, seit v0.4): sudoers-Zeile mit Argument (`restart_service *`).
+  Validiert `<name>` gegen `^[A-Za-z0-9_.@-]{1,64}$` (`_valid_service_name()` in Bash) BEVOR
+  `systemctl restart "$SVC"` läuft – zusätzlich validiert der Python-Daemon denselben Namen
+  schon vor dem Aufruf. Kein Shell-Passthrough (Array-Form in `subprocess.run`).
+- `link_check <pid> <port>` (Funktion 4, seit v0.5): sudoers-Zeile mit Argument (`link_check *`).
+  PID und Port rein numerisch, validiert gegen `^[0-9]{1,10}$` (`_valid_number()`). Führt
+  `ss -H -tnp state established "( dport = :<port> )"` aus und prüft per `grep` auf `pid=<pid>`.
+  Root nötig weil Mosquitto/Gateway oft unter anderen System-Usern laufen als `loxberry`.
 
 ### state.json Struktur (DATADIR)
 - `last_check_epoch`, `last_check`, `netbird_connected`, `netbird_management`, `netbird_signal`
@@ -93,8 +118,12 @@
   Aktivierung – Basis für die Frequenz-Auswertung `counter % EVERY_N == 0`)
 - `mosquitto_active_state`, `mosquitto_sub_state`, `mosquitto_tcp_ok`, `mosquitto_healthy`,
   `mosquitto_last_restart_epoch`, `mosquitto_last_restart`, `mosquitto_restart_count` (Funktion 4)
-- `gateway_active_state`, `gateway_sub_state`, `gateway_healthy`, `gateway_last_restart_epoch`,
+- `gateway_active_state`, `gateway_sub_state`, `gateway_healthy`, `gateway_broker_checked`,
+  `gateway_broker_linked`, `gateway_broker_detail`, `gateway_last_restart_epoch`,
   `gateway_last_restart`, `gateway_restart_count` (Funktion 4)
+- `action_log` (Liste, max. 200 Einträge, neueste am Ende – `{epoch, time, action, success,
+  detail}`; `action` ∈ `netbird_restart`/`mosquitto_restart`/`gateway_restart`/`netbird_watchdog`/
+  `scheduled_reboot`; PHP zeigt sie umgekehrt/neueste zuerst via `array_reverse()`)
 - `status` (Text, "OK" oder Fehlermeldung)
 
 ### Cooldown-/Anti-Loop-Logik (KRITISCH)
@@ -122,8 +151,8 @@ das ist beabsichtigtes LoxBerry-Verhalten, kein Bug, aber relevant beim Testen (
 - Präfix Standard: `HitWatch/netbird_watchdog/` (konfigurierbar über `[MQTT] TOPIC_PREFIX`)
 - Topics: `status`, `connected`, `management`, `signal`, `last_check_epoch`, `last_restart_epoch`,
   `restart_count_total`, `last_reboot_epoch`, `last_reboot_reason`, `cooldown_active`,
-  `cooldown_remaining_min`, plus (nur wenn F4-Teilfunktion aktiv) `mosquitto/*` und `gateway/*`
-  (`healthy`, `active_state`, `sub_state`, `restart_count`)
+  `cooldown_remaining_min`, plus (wenn F4 aktiv) `mosquitto/*` und `gateway/*` (`healthy`,
+  `active_state`, `sub_state`, `restart_count`, zusätzlich `gateway/broker_linked`)
 - Vollständige Referenz: `webfrontend/htmlauth/app_help.php`
 
 ---
@@ -138,18 +167,25 @@ nötig (kein Standort erforderlich) – `ajax.php` daher deutlich schlanker als 
 
 | Datei | Zweck |
 |---|---|
-| `app_status.php` | Netbird-Status, Watchdog-Aktionen (letzter Neustart/Reboot + Grund), Cooldown-Anzeige, MQTT-Dienste-Status (Funktion 4, nur wenn aktiv), Funktionen-Übersicht, Daemon-Controls |
-| `app_settings.php` | F1/F2/F3/F4-Toggles + Parameter, F2-Toggle per JS gesperrt wenn F1 aus, F4-Subtoggles gesperrt wenn F4 aus, F3 Wochentags-Chips (Mehrfachauswahl) + Frequenz-Select, MQTT-Karte |
-| `app_log.php` | Log-Session-Liste (identisch zu Unwetter4Lox-Muster) |
-| `app_help.php` | Die vier Funktionen, Cooldown-/Fangfenster-Erklärung, Sicherheits-/sudoers-Hinweis (inkl. `restart_service`-Ausnahme), MQTT-Referenz, FAQ |
+| `app_status.php` | Netbird-Status, Watchdog-Aktionen, **Letzte Aktionen** (neu, letzte 8 aus `action_log`), Cooldown-Anzeige, MQTT-Dienste-Status (Funktion 4, mit Gateway↔Broker-Link), Funktionen-Übersicht, Daemon-Controls |
+| `app_settings.php` | F1/F2/F3/F4-Toggles + Parameter, F2-Toggle per JS gesperrt wenn F1 aus, F4-Autorestart-Toggles (nicht mehr "Überwachung") gesperrt wenn F4 aus, F3 Wochentags-Chips (Mehrfachauswahl) + Frequenz-Select, MQTT-Karte |
+| `app_log.php` | **Aktions-Historie** (neu, volle `action_log`-Tabelle bis 200 Einträge) oberhalb der bisherigen Log-Session-Liste |
+| `app_help.php` | Die vier Funktionen, Aktions-Historie-Erklärung, Cooldown-/Fangfenster-Erklärung, Sicherheits-/sudoers-Hinweis (inkl. `restart_service`- und `link_check`-Ausnahme), MQTT-Referenz, FAQ |
 
 `.sl-chip` / `.sl-chip-grid` CSS (Wochentags-Mehrfachauswahl) wurde aus dem Unwetter4Lox-Vorbild
 zurückgeholt, nachdem es beim ersten Trimmen der Komponentenbibliothek entfernt worden war.
+`hw4l_action_label(string $action): array` in `common.php` liefert `[icon, label]` für einen
+Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.php` (Volltabelle).
 
 ---
 
 ## 📋 Versionshistorie
 
+- **v0.5 (2026-09-18):** Funktion 4 überarbeitet – `MOSQUITTO_ENABLED`/`GATEWAY_ENABLED` (steuerten
+  Anzeige+Neustart zusammen) ersetzt durch `MOSQUITTO_AUTORESTART`/`GATEWAY_AUTORESTART` (nur noch
+  Neustart; Status wird immer angezeigt sobald F4 an ist). Neuer Gateway↔Mosquitto-Verbindungscheck
+  (`link_check` via `ss -tnp`, informativ). Neue Aktions-Historie (`action_log` in `state.json`,
+  max. 200 Einträge) – "Letzte Aktionen"-Karte im Status-Tab, volle Tabelle im Log-Tab.
 - **v0.4 (2026-09-18):** Funktion 4 (MQTT-Dienste-Watchdog) neu – Mosquitto-Broker (Dienststatus +
   TCP-Check) und/oder LoxBerry MQTT-Gateway (Dienststatus) unabhängig voneinander überwachen und
   bei Bedarf neu starten. Root-Helper um validiertes `restart_service <name>` erweitert (einzige
