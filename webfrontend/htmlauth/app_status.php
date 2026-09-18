@@ -22,6 +22,11 @@ $weekday_names = [1=>'Montag',2=>'Dienstag',3=>'Mittwoch',4=>'Donnerstag',5=>'Fr
 $f3_weekdays = array_filter(array_map('trim', explode(',', $cfg['SCHEDULED_REBOOT']['WEEKDAYS'] ?? '7')));
 $f3_time    = $cfg['SCHEDULED_REBOOT']['TIME'] ?? '04:00';
 $f3_every_n = (int)($cfg['SCHEDULED_REBOOT']['EVERY_N'] ?? 1);
+$f4_enabled = ($cfg['MQTT_WATCHDOG']['ENABLED'] ?? '0') == '1';
+$f4_mosq_enabled = $f4_enabled && ($cfg['MQTT_WATCHDOG']['MOSQUITTO_ENABLED'] ?? '1') == '1';
+$f4_gw_enabled   = $f4_enabled && ($cfg['MQTT_WATCHDOG']['GATEWAY_ENABLED'] ?? '0') == '1';
+$f4_mosq_service = $cfg['MQTT_WATCHDOG']['MOSQUITTO_SERVICE'] ?? 'mosquitto';
+$f4_gw_service   = $cfg['MQTT_WATCHDOG']['GATEWAY_SERVICE'] ?? 'mqttgateway';
 
 // ── Daemon-Status (PID-Check + Prozessname) ──
 $pidfile        = $lbplogdir . '/daemon.pid';
@@ -166,6 +171,46 @@ render_header('app_status');
     </div>
 </div>
 
+<?php if ($f4_mosq_enabled || $f4_gw_enabled): ?>
+<!-- ================================================================
+     MQTT-DIENSTE-STATUS
+     ================================================================ -->
+<div class="sl-card">
+    <div class="sl-card-head">
+        <span class="sl-card-head-title">📡 MQTT-Dienste-Status</span>
+    </div>
+    <div class="sl-card-body">
+        <ul class="sl-info-list">
+<?php if ($f4_mosq_enabled):
+    $m_active = $state['mosquitto_active_state'] ?? '?';
+    $m_sub    = $state['mosquitto_sub_state'] ?? '';
+    $m_tcp    = (bool)($state['mosquitto_tcp_ok'] ?? false);
+    $m_healthy= (bool)($state['mosquitto_healthy'] ?? false);
+    $m_restarts = (int)($state['mosquitto_restart_count'] ?? 0);
+?>
+            <li><span class="sl-info-key">Mosquitto (<?= h($f4_mosq_service) ?>)</span>
+                <span class="sl-info-val <?= $m_healthy ? 'ok' : 'alert' ?>"><?= h($m_active) ?><?= $m_sub ? ' / ' . h($m_sub) : '' ?></span></li>
+            <li><span class="sl-info-key">TCP-Erreichbarkeit</span>
+                <span class="sl-info-val <?= $m_tcp ? 'ok' : 'alert' ?>"><?= $m_tcp ? 'erreichbar' : 'nicht erreichbar' ?></span></li>
+            <li><span class="sl-info-key">Mosquitto-Neustarts</span> <span class="sl-info-val"><?= $m_restarts ?></span></li>
+<?php endif; ?>
+<?php if ($f4_gw_enabled):
+    $g_active = $state['gateway_active_state'] ?? '?';
+    $g_sub    = $state['gateway_sub_state'] ?? '';
+    $g_healthy= (bool)($state['gateway_healthy'] ?? false);
+    $g_restarts = (int)($state['gateway_restart_count'] ?? 0);
+?>
+            <li><span class="sl-info-key">MQTT-Gateway (<?= h($f4_gw_service) ?>)</span>
+                <span class="sl-info-val <?= $g_healthy ? 'ok' : 'alert' ?>"><?= h($g_active) ?><?= $g_sub ? ' / ' . h($g_sub) : '' ?></span></li>
+            <li><span class="sl-info-key">Gateway-Neustarts</span> <span class="sl-info-val"><?= $g_restarts ?></span></li>
+<?php endif; ?>
+        </ul>
+        <p class="sl-hint" style="margin-top:0.5rem">Zustand direkt von <code>systemctl show</code> (ActiveState / SubState) –
+            "activating" bedeutet der Dienst startet gerade bzw. verbindet noch.</p>
+    </div>
+</div>
+<?php endif; ?>
+
 <!-- ================================================================
      FUNKTIONEN-ÜBERSICHT
      ================================================================ -->
@@ -186,6 +231,10 @@ render_header('app_status');
             <div class="sl-stat">
                 <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f3_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f3_enabled ? 'An' : 'Aus' ?></div>
                 <div class="sl-stat-lbl">F3 – Automatischer Reboot</div>
+            </div>
+            <div class="sl-stat">
+                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f4_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_enabled ? 'An' : 'Aus' ?></div>
+                <div class="sl-stat-lbl">F4 – MQTT-Watchdog</div>
             </div>
         </div>
         <?php if ($f3_enabled):

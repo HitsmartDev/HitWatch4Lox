@@ -1,6 +1,6 @@
 # HitWatch4Lox
 
-**LoxBerry-Plugin: lokaler Netbird-Verbindungs-Watchdog mit Anti-Loop-Reboot-Eskalation.**
+**LoxBerry-Plugin: lokaler Netbird- und MQTT-Dienste-Watchdog mit Anti-Loop-Reboot-Eskalation.**
 
 > Die installierte Version steht in der Plugin-Oberfläche (Kopfzeile) und im LoxBerry Plugin-Manager. Änderungen pro Release: siehe `CHANGELOG.md`.
 
@@ -22,7 +22,7 @@ Neustart-Schleife zu verfangen.
 
 ---
 
-## Die drei Funktionen
+## Die vier Funktionen
 
 ### 1. Netbird-Dienst-Watchdog
 
@@ -48,6 +48,14 @@ Neustart-Schleife zu verfangen.
 - Fangfenster (2× Prüfintervall, mind. 10 min): war der Daemon zum geplanten Zeitpunkt nicht
   aktiv, wird der Reboot an diesem Tag nicht nachträglich nachgeholt
 
+### 4. MQTT-Dienste-Watchdog (optional)
+
+- Überwacht Mosquitto-Broker und/oder LoxBerry MQTT-Gateway unabhängig voneinander
+- Mosquitto: systemd-Dienststatus **und** echter TCP-Erreichbarkeitstest zum Broker-Port
+- MQTT-Gateway: systemd-Dienststatus (Dienstname konfigurierbar, da versionsabhängig)
+- Startet den jeweiligen Dienst bei Bedarf einmalig neu – kein Reboot, kein Cooldown nötig
+- Nutzt dasselbe Prüfintervall wie Funktion 1
+
 ### Schutz vor Boot-Loops (Cooldown)
 
 Vor jedem automatischen Reboot (Funktion 2 **und** Funktion 3) prüft das Plugin, ob in den
@@ -62,9 +70,11 @@ Netzwerk/Router/ISP beim Kunden).
 
 Der Daemon läuft als unprivilegierter `loxberry`-User. Alle root-pflichtigen Aktionen
 (Netbird-Status abfragen, Dienst neu starten, rebooten) laufen ausschließlich über ein
-separates Root-Helper-Skript (`netbird_watchdog_helper.sh`) mit drei festen Unterbefehlen.
-Die `sudoers`-Regel gibt **ausschließlich** diese exakten Aufrufe frei – keine Wildcards,
-keine Weitergabe beliebiger Argumente.
+separates Root-Helper-Skript (`netbird_watchdog_helper.sh`). Für Netbird (Funktion 1/2/3) gibt
+die `sudoers`-Regel **ausschließlich** feste, argumentlose Aufrufe frei – keine Wildcards.
+Einzige Ausnahme: `restart_service <name>` (Funktion 4) nimmt einen konfigurierbaren
+Dienstnamen entgegen, der sowohl vom Daemon als auch vom Helper-Skript streng gegen ein
+Identifier-Muster validiert wird, bevor er an `systemctl restart` übergeben wird.
 
 ---
 

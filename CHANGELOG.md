@@ -5,6 +5,27 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.4] – 2026-09-18
+
+### Hinzugefügt – Funktion 4: MQTT-Dienste-Watchdog
+- Neue, unabhängig ein-/ausschaltbare Funktion überwacht Mosquitto-Broker und/oder LoxBerry
+  MQTT-Gateway und startet den jeweiligen Dienst bei Bedarf einmalig neu (gleiches
+  "kein Loop, ein Versuch pro Zyklus"-Prinzip wie Funktion 1).
+- **Mosquitto:** Prüft sowohl den systemd-Dienststatus (`systemctl show`, ActiveState/SubState)
+  als auch eine echte TCP-Verbindung zum konfigurierten Broker-Host/Port – ein hängender,
+  aber laut systemd noch "aktiver" Prozess wird so trotzdem als ungesund erkannt.
+- **MQTT-Gateway:** Prüft den systemd-Dienststatus. Standardmäßig deaktiviert, da der genaue
+  Dienstname je nach LoxBerry-Version variieren kann; in den Einstellungen frei konfigurierbar.
+- Status-Anzeige zeigt den vollen systemd-Zustand (ActiveState/SubState, z.B. "active/running"
+  oder "activating/start" während ein Dienst noch verbindet), nicht nur ein Ampel-Symbol.
+- Neue MQTT-Topics `mosquitto/*` und `gateway/*` (healthy, active_state, sub_state, restart_count).
+- Root-Helper um `restart_service <name>` erweitert – die einzige sudoers-Regel mit einem vom
+  Nutzer konfigurierbaren Argument im gesamten Plugin. Name wird sowohl vom Python-Daemon als
+  auch vom Helper-Skript selbst gegen ein striktes Identifier-Muster validiert
+  (`^[A-Za-z0-9_.@-]{1,64}$`) bevor er an `systemctl restart` übergeben wird.
+
+---
+
 ## [0.3] – 2026-09-17
 
 ### Geändert – Funktion 3: mehrere Wochentage + Frequenz statt einem Wochentag

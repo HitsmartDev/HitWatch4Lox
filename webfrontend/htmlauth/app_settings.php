@@ -21,8 +21,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $f1_en   = isset($_POST['f1_enabled']) ? '1' : '0';
         $f2_en   = isset($_POST['f2_enabled']) ? '1' : '0';
         $f3_en   = isset($_POST['f3_enabled']) ? '1' : '0';
+        $f4_en   = isset($_POST['f4_enabled']) ? '1' : '0';
+        $f4_mosq_en = isset($_POST['f4_mosquitto_enabled']) ? '1' : '0';
+        $f4_gw_en   = isset($_POST['f4_gateway_enabled']) ? '1' : '0';
         $mqtt_en = isset($_POST['mqtt_enabled']) ? '1' : '0';
         $use_lb_new = isset($_POST['use_lb_mqtt']) ? '1' : '0';
+
+        // Dienstnamen: nur Buchstaben/Ziffern/._@- (wird an sudo systemctl restart übergeben) –
+        // ungültige Eingaben fallen auf den Standardwert zurück statt einen Fehler zu zeigen.
+        $svc_re = '/^[A-Za-z0-9_.@-]{1,64}$/';
+        $mosq_service = trim($_POST['f4_mosquitto_service'] ?? 'mosquitto');
+        if (!preg_match($svc_re, $mosq_service)) $mosq_service = 'mosquitto';
+        $gw_service = trim($_POST['f4_gateway_service'] ?? 'mqttgateway');
+        if (!preg_match($svc_re, $gw_service)) $gw_service = 'mqttgateway';
+        $mosq_host = strip_tags(trim($_POST['f4_mosquitto_host'] ?? '127.0.0.1')) ?: '127.0.0.1';
+        $mosq_port = max(1, min(65535, intval($_POST['f4_mosquitto_port'] ?? 1883)));
 
         // Mehrere Wochentage: Checkboxen f3_weekday_1..f3_weekday_7 (ISO: 1=Mo .. 7=So)
         $weekdays = [];
@@ -53,6 +66,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $c .= "TIME={$time_raw}\n";
         $c .= "EVERY_N={$every_n}\n\n";
 
+        $c .= "[MQTT_WATCHDOG]\n";
+        $c .= "ENABLED={$f4_en}\n";
+        $c .= "MOSQUITTO_ENABLED={$f4_mosq_en}\n";
+        $c .= "MOSQUITTO_SERVICE={$mosq_service}\n";
+        $c .= "MOSQUITTO_HOST={$mosq_host}\n";
+        $c .= "MOSQUITTO_PORT={$mosq_port}\n";
+        $c .= "GATEWAY_ENABLED={$f4_gw_en}\n";
+        $c .= "GATEWAY_SERVICE={$gw_service}\n\n";
+
         $c .= "[MQTT]\n";
         $c .= "ENABLED={$mqtt_en}\n";
         $c .= "USE_LOXBERRY_MQTT={$use_lb_new}\n";
@@ -80,6 +102,9 @@ function cv(string $s, string $k, string $d = ''): string {
 $f1_enabled = ($cfg['WATCHDOG']['ENABLED'] ?? '1') == '1';
 $f2_enabled = ($cfg['REBOOT_ESCALATION']['ENABLED'] ?? '0') == '1';
 $f3_enabled = ($cfg['SCHEDULED_REBOOT']['ENABLED'] ?? '0') == '1';
+$f4_enabled = ($cfg['MQTT_WATCHDOG']['ENABLED'] ?? '0') == '1';
+$f4_mosq_enabled = ($cfg['MQTT_WATCHDOG']['MOSQUITTO_ENABLED'] ?? '1') == '1';
+$f4_gw_enabled   = ($cfg['MQTT_WATCHDOG']['GATEWAY_ENABLED'] ?? '0') == '1';
 $weekday_names = [1=>'Mo',2=>'Di',3=>'Mi',4=>'Do',5=>'Fr',6=>'Sa',7=>'So'];
 $f3_weekdays_cfg = array_map('trim', explode(',', $cfg['SCHEDULED_REBOOT']['WEEKDAYS'] ?? '7'));
 
@@ -213,6 +238,69 @@ render_header('app_settings');
 </div>
 
 <!-- ================================================================
+     FUNKTION 4 – MQTT-DIENSTE-WATCHDOG
+     ================================================================ -->
+<div class="sl-card">
+    <div class="sl-card-head"><span class="sl-card-head-title">📡 Funktion 4 – MQTT-Dienste-Watchdog</span></div>
+    <div class="sl-card-body">
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" id="f4_enabled" name="f4_enabled" <?= $f4_enabled ? 'checked' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">MQTT-Dienste-Watchdog aktivieren</span>
+            </div>
+            <p class="sl-hint">Prüft Mosquitto-Broker und/oder LoxBerry MQTT-Gateway unabhängig
+                voneinander (Prüfintervall = Funktion 1) und startet den jeweiligen Dienst bei
+                Bedarf einmalig neu. Nutze <code>systemctl list-units --type=service | grep -i mqtt</code>
+                per SSH, falls du die genauen Dienstnamen deines Systems prüfen willst.</p>
+        </div>
+        <hr>
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" id="f4_mosquitto_enabled" name="f4_mosquitto_enabled" <?= $f4_mosq_enabled ? 'checked' : '' ?> <?= !$f4_enabled ? 'disabled' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">Mosquitto-Broker überwachen</span>
+            </div>
+            <p class="sl-hint">Prüft sowohl den systemd-Dienststatus als auch eine echte TCP-Verbindung
+                zum Broker-Port – ein hängender Prozess, der zwar noch "aktiv" gemeldet wird aber keine
+                Verbindungen mehr annimmt, wird so trotzdem erkannt.</p>
+        </div>
+        <div class="sl-field">
+            <label for="f4_mosquitto_service">Dienstname (systemd)</label>
+            <input type="text" id="f4_mosquitto_service" name="f4_mosquitto_service" value="<?= cv('MQTT_WATCHDOG','MOSQUITTO_SERVICE','mosquitto') ?>">
+        </div>
+        <div class="sl-field">
+            <label for="f4_mosquitto_host">Broker-Adresse für TCP-Check</label>
+            <input type="text" id="f4_mosquitto_host" name="f4_mosquitto_host" value="<?= cv('MQTT_WATCHDOG','MOSQUITTO_HOST','127.0.0.1') ?>">
+        </div>
+        <div class="sl-field">
+            <label for="f4_mosquitto_port">Broker-Port für TCP-Check</label>
+            <input type="number" id="f4_mosquitto_port" name="f4_mosquitto_port" value="<?= cv('MQTT_WATCHDOG','MOSQUITTO_PORT','1883') ?>">
+        </div>
+        <hr>
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" id="f4_gateway_enabled" name="f4_gateway_enabled" <?= $f4_gw_enabled ? 'checked' : '' ?> <?= !$f4_enabled ? 'disabled' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">LoxBerry MQTT-Gateway überwachen</span>
+            </div>
+            <p class="sl-hint">Standardmäßig deaktiviert, da der Dienstname je nach LoxBerry-Version
+                unterschiedlich sein kann – bitte vor dem Aktivieren den korrekten Namen prüfen.</p>
+        </div>
+        <div class="sl-field">
+            <label for="f4_gateway_service">Dienstname (systemd)</label>
+            <input type="text" id="f4_gateway_service" name="f4_gateway_service" value="<?= cv('MQTT_WATCHDOG','GATEWAY_SERVICE','mqttgateway') ?>">
+        </div>
+    </div>
+</div>
+
+<!-- ================================================================
      MQTT BROKER (optionale Statusanzeige)
      ================================================================ -->
 <div class="sl-card collapsed">
@@ -282,6 +370,21 @@ render_header('app_settings');
         if (!f1.checked) f2.checked = false;
     }
     f1.addEventListener('change', update);
+})();
+
+// F4 Sub-Toggles: Mosquitto/Gateway nur bedienbar wenn F4 aktiv
+(function() {
+    var f4 = document.getElementById('f4_enabled');
+    var sub = [document.getElementById('f4_mosquitto_enabled'), document.getElementById('f4_gateway_enabled')];
+    if (!f4) return;
+    function update() {
+        sub.forEach(function(el) {
+            if (!el) return;
+            el.disabled = !f4.checked;
+            if (!f4.checked) el.checked = false;
+        });
+    }
+    f4.addEventListener('change', update);
 })();
 
 // MQTT Toggle: manuelle Felder ein-/ausblenden

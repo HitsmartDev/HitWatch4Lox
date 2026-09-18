@@ -1,6 +1,6 @@
-"""HitWatch4Lox Daemon – Netbird-Verbindungs-Watchdog für LoxBerry"""
-DAEMON_VERSION = '0.3'
-import os, sys, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
+"""HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
+DAEMON_VERSION = '0.4'
+import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
 
@@ -143,12 +143,36 @@ MQTT_USER          = get_cfg('MQTT', 'USER', '')
 MQTT_PASS          = get_cfg('MQTT', 'PASS', '')
 TOPIC_PREFIX        = get_cfg('MQTT', 'TOPIC_PREFIX', 'HitWatch/netbird_watchdog')
 
+# Nur Buchstaben/Ziffern/._@- erlaubt – wird an "sudo helper.sh restart_service <name>"
+# übergeben (die einzige Stelle mit einem vom Nutzer konfigurierbaren sudo-Argument).
+_SERVICE_NAME_RE = re.compile(r'^[A-Za-z0-9_.@-]{1,64}$')
+
+def _valid_service_name(name: str) -> bool:
+    return bool(name) and bool(_SERVICE_NAME_RE.match(name))
+
+F4_ENABLED           = get_cfg('MQTT_WATCHDOG', 'ENABLED', '0') == '1'
+F4_MOSQUITTO_ENABLED = F4_ENABLED and get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_ENABLED', '1') == '1'
+F4_MOSQUITTO_SERVICE = get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_SERVICE', 'mosquitto').strip()
+F4_MOSQUITTO_HOST    = get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_HOST', '127.0.0.1').strip() or '127.0.0.1'
+F4_MOSQUITTO_PORT    = int(get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_PORT', '1883') or '1883')
+F4_GATEWAY_ENABLED   = F4_ENABLED and get_cfg('MQTT_WATCHDOG', 'GATEWAY_ENABLED', '0') == '1'
+F4_GATEWAY_SERVICE   = get_cfg('MQTT_WATCHDOG', 'GATEWAY_SERVICE', 'mqttgateway').strip()
+if F4_MOSQUITTO_ENABLED and not _valid_service_name(F4_MOSQUITTO_SERVICE):
+    log.warning(f'MQTT_WATCHDOG.MOSQUITTO_SERVICE ungültig ({F4_MOSQUITTO_SERVICE!r}) – Mosquitto-Überwachung deaktiviert')
+    F4_MOSQUITTO_ENABLED = False
+if F4_GATEWAY_ENABLED and not _valid_service_name(F4_GATEWAY_SERVICE):
+    log.warning(f'MQTT_WATCHDOG.GATEWAY_SERVICE ungültig ({F4_GATEWAY_SERVICE!r}) – Gateway-Überwachung deaktiviert')
+    F4_GATEWAY_ENABLED = False
+
 _f3_weekdays_str = ','.join(str(w) for w in sorted(F3_WEEKDAYS))
 log.info(
     f'Konfiguration: F1(Watchdog)={"an" if F1_ENABLED else "aus"} (Intervall {CHECK_INTERVAL}s) | '
     f'F2(Reboot-Eskalation)={"an" if F2_ENABLED else "aus"} (Cooldown {COOLDOWN_HOURS}h) | '
     f'F3(Automatischer Reboot)={"an" if F3_ENABLED else "aus"} '
     f'(Tage {_f3_weekdays_str} um {F3_TIME}, alle {F3_EVERY_N}x) | '
+    f'F4(MQTT-Watchdog)={"an" if F4_ENABLED else "aus"} '
+    f'(Mosquitto={"an:"+F4_MOSQUITTO_SERVICE if F4_MOSQUITTO_ENABLED else "aus"}, '
+    f'Gateway={"an:"+F4_GATEWAY_SERVICE if F4_GATEWAY_ENABLED else "aus"}) | '
     f'MQTT={"an" if MQTT_ENABLED else "aus"}'
 )
 
@@ -214,9 +238,10 @@ def fmt(epoch):
 # ---------------------------------------------------------------------------
 # Root-Helper-Aufrufe (Netbird-Status, Dienst-Neustart, Reboot)
 # ---------------------------------------------------------------------------
-def run_helper(action, timeout=30):
+def run_helper(action, arg=None, timeout=30):
     try:
-        r = subprocess.run(['sudo', HELPER_SCRIPT, action], capture_output=True, text=True, timeout=timeout)
+        cmd = ['sudo', HELPER_SCRIPT, action] + ([arg] if arg else [])
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
         return -1, '', f'Timeout nach {timeout}s'
@@ -244,6 +269,47 @@ def restart_netbird():
     rc, out, err = run_helper('restart', timeout=30)
     if rc != 0:
         log.error(f'Netbird-Dienst-Neustart fehlgeschlagen (RC={rc}): {(err or out).strip()[:300]}')
+        return False
+    return True
+
+# ---------------------------------------------------------------------------
+# Funktion 4: MQTT-Dienste-Watchdog (Mosquitto-Broker, LoxBerry MQTT-Gateway)
+# Status-Abfragen brauchen KEIN Root (systemctl show ist für alle User lesbar) – nur
+# restart_service läuft über den validierenden Root-Helper.
+# ---------------------------------------------------------------------------
+def get_service_state(service_name):
+    """Liefert ActiveState + SubState eines systemd-Dienstes (z.B. 'active'/'running',
+    'activating'/'start' während ein Dienst gerade verbindet/hochfährt, 'failed'/'failed')."""
+    try:
+        r = subprocess.run(
+            ['systemctl', 'show', service_name, '--property=ActiveState,SubState', '--no-pager'],
+            capture_output=True, text=True, timeout=10,
+        )
+        props = {}
+        for line in r.stdout.splitlines():
+            if '=' in line:
+                k, v = line.split('=', 1)
+                props[k] = v.strip()
+        active_state = props.get('ActiveState') or 'unknown'
+        sub_state    = props.get('SubState') or ''
+        return {'active_state': active_state, 'sub_state': sub_state, 'healthy': active_state == 'active'}
+    except Exception as e:
+        return {'active_state': 'unknown', 'sub_state': str(e)[:120], 'healthy': False}
+
+def tcp_check(host, port, timeout=4):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+def restart_service(service_name):
+    if not _valid_service_name(service_name):
+        log.error(f'Dienst-Neustart abgelehnt – ungültiger Name: {service_name!r}')
+        return False
+    rc, out, err = run_helper('restart_service', arg=service_name, timeout=30)
+    if rc != 0:
+        log.error(f'Neustart von {service_name!r} fehlgeschlagen (RC={rc}): {(err or out).strip()[:300]}')
         return False
     return True
 
@@ -305,6 +371,20 @@ def mqtt_publish_status(state):
             {'topic': f'{TOPIC_PREFIX}/cooldown_active',           'payload': '1' if cooldown_remaining_seconds(state) > 0 else '0', 'retain': True},
             {'topic': f'{TOPIC_PREFIX}/cooldown_remaining_min',    'payload': str(int(cooldown_remaining_seconds(state) // 60)), 'retain': True},
         ]
+        if F4_MOSQUITTO_ENABLED:
+            msgs += [
+                {'topic': f'{TOPIC_PREFIX}/mosquitto/healthy',      'payload': '1' if state.get('mosquitto_healthy') else '0',        'retain': True},
+                {'topic': f'{TOPIC_PREFIX}/mosquitto/active_state', 'payload': state.get('mosquitto_active_state', '?'),               'retain': True},
+                {'topic': f'{TOPIC_PREFIX}/mosquitto/sub_state',    'payload': state.get('mosquitto_sub_state', '?'),                  'retain': True},
+                {'topic': f'{TOPIC_PREFIX}/mosquitto/restart_count','payload': str(int(state.get('mosquitto_restart_count', 0) or 0)),'retain': True},
+            ]
+        if F4_GATEWAY_ENABLED:
+            msgs += [
+                {'topic': f'{TOPIC_PREFIX}/gateway/healthy',        'payload': '1' if state.get('gateway_healthy') else '0',          'retain': True},
+                {'topic': f'{TOPIC_PREFIX}/gateway/active_state',   'payload': state.get('gateway_active_state', '?'),                 'retain': True},
+                {'topic': f'{TOPIC_PREFIX}/gateway/sub_state',      'payload': state.get('gateway_sub_state', '?'),                    'retain': True},
+                {'topic': f'{TOPIC_PREFIX}/gateway/restart_count',  'payload': str(int(state.get('gateway_restart_count', 0) or 0)),  'retain': True},
+            ]
         mqtt_publish_mod.multiple(
             msgs, hostname=broker, port=port, auth=auth,
             client_id=f'HitWatch4Lox-{socket.gethostname()}', qos=0,
@@ -480,6 +560,42 @@ def run():
                             f'{F3_TIME} bereits abgelaufen) – wird an diesem Wochentag nicht nachgeholt, '
                             f'Frequenz-Zähler bleibt unverändert.'
                         )
+
+            # ---------------- Funktion 4: MQTT-Dienste-Watchdog ----------------
+            if F4_ENABLED:
+                if F4_MOSQUITTO_ENABLED:
+                    m = get_service_state(F4_MOSQUITTO_SERVICE)
+                    tcp_ok = tcp_check(F4_MOSQUITTO_HOST, F4_MOSQUITTO_PORT)
+                    healthy = m['healthy'] and tcp_ok
+                    state['mosquitto_active_state'] = m['active_state']
+                    state['mosquitto_sub_state']    = m['sub_state']
+                    state['mosquitto_tcp_ok']       = tcp_ok
+                    state['mosquitto_healthy']      = healthy
+                    if not healthy:
+                        log.warning(
+                            f"Mosquitto ({F4_MOSQUITTO_SERVICE}) nicht gesund – Status: "
+                            f"{m['active_state']}/{m['sub_state']}, TCP {F4_MOSQUITTO_HOST}:{F4_MOSQUITTO_PORT} "
+                            f"{'erreichbar' if tcp_ok else 'NICHT erreichbar'} – starte Dienst neu..."
+                        )
+                        ok = restart_service(F4_MOSQUITTO_SERVICE)
+                        state['mosquitto_last_restart_epoch'] = now
+                        state['mosquitto_last_restart']       = fmt(now)
+                        state['mosquitto_restart_count']      = int(state.get('mosquitto_restart_count', 0) or 0) + (1 if ok else 0)
+
+                if F4_GATEWAY_ENABLED:
+                    g = get_service_state(F4_GATEWAY_SERVICE)
+                    state['gateway_active_state'] = g['active_state']
+                    state['gateway_sub_state']    = g['sub_state']
+                    state['gateway_healthy']      = g['healthy']
+                    if not g['healthy']:
+                        log.warning(
+                            f"MQTT-Gateway ({F4_GATEWAY_SERVICE}) nicht gesund – Status: "
+                            f"{g['active_state']}/{g['sub_state']} – starte Dienst neu..."
+                        )
+                        ok = restart_service(F4_GATEWAY_SERVICE)
+                        state['gateway_last_restart_epoch'] = now
+                        state['gateway_last_restart']       = fmt(now)
+                        state['gateway_restart_count']      = int(state.get('gateway_restart_count', 0) or 0) + (1 if ok else 0)
 
             # ---------------- Heartbeat / Persistenz ----------------
             if now - _last_heartbeat > HEARTBEAT_SECONDS:

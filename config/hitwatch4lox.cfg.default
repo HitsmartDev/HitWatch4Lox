@@ -21,6 +21,19 @@ WEEKDAYS=7
 TIME=04:00
 EVERY_N=1
 
+[MQTT_WATCHDOG]
+# Funktion 4: Überwacht Mosquitto-Broker und/oder LoxBerry MQTT-Gateway unabhängig voneinander
+# und startet den jeweiligen systemd-Dienst bei Bedarf neu. Nutzt dasselbe Prüfintervall wie
+# Funktion 1 (WATCHDOG.CHECK_INTERVAL). Dienstnamen sind je nach LoxBerry-Setup ggf. anzupassen
+# (systemctl list-units --type=service | grep -i mqtt hilft beim Ermitteln).
+ENABLED=0
+MOSQUITTO_ENABLED=1
+MOSQUITTO_SERVICE=mosquitto
+MOSQUITTO_HOST=127.0.0.1
+MOSQUITTO_PORT=1883
+GATEWAY_ENABLED=0
+GATEWAY_SERVICE=mqttgateway
+
 [MQTT]
 # Optionale Statusveröffentlichung an Loxone (Verbindungsstatus, letzte Aktionen).
 # Rein informativ – die Watchdog-Logik selbst ist von MQTT vollständig unabhängig.
