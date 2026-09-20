@@ -5,6 +5,24 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.2] – 2026-09-20
+
+### Behoben – MQTT-Statusveröffentlichung schlug bei jedem Zyklus fehl (v1.1-Regression)
+- Erster Live-Test von v1.1 zeigte im Log: `MQTT: Statusveröffentlichung fehlgeschlagen
+  (unkritisch): multiple() got an unexpected keyword argument 'qos'`. Ursache: anders als
+  `publish.single()` (für das neue Event-Topic) kennt `publish.multiple()` gar kein globales
+  `qos`-Argument – QoS wird dort ausschließlich pro Nachricht über einen `qos`-Key im jeweiligen
+  Dict gesetzt. Das fälschlich übergebene `qos=0` führte zu einem `TypeError` bei **jeder**
+  einzelnen Statusveröffentlichung (Ampel, alle Funktions-Topics), nicht nur den neuen
+  Diagnose-Topics. Fix: `qos=0` aus dem `multiple()`-Aufruf entfernt (Signatur lokal mit
+  `paho-mqtt` verifiziert).
+- Nebenbei behoben: "Zeit-Synchronisation nicht ermittelbar" loggte bisher keinen Grund. Ein
+  fehlgeschlagener `timedatectl`-Aufruf (leere Ausgabe, Fehler, Binary fehlt) wird jetzt mit dem
+  genauen Grund im Log vermerkt statt still zu bleiben – Speicher/RAM/Temperatur-Checks bleiben
+  bewusst ohne Extra-Logging, da "Sensor nicht vorhanden" dort ein normaler, erwarteter Fall ist.
+
+---
+
 ## [1.1] – 2026-09-20
 
 ### Hinzugefügt – Funktion 5: System-Diagnose (Auto-Heal)

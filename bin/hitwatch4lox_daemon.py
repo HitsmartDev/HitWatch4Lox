@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.1'
+DAEMON_VERSION = '1.2'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -622,8 +622,11 @@ def check_time_sync():
         )
         vals = [v.strip().lower() for v in r.stdout.splitlines() if v.strip()]
         if not vals:
-            return {'ok': False, 'synced': None}
+            err = (r.stderr or r.stdout or f'RC={r.returncode}, keine Ausgabe').strip()[:150]
+            return {'ok': False, 'synced': None, 'error': err}
         return {'ok': True, 'synced': any(v == 'yes' for v in vals)}
+    except FileNotFoundError:
+        return {'ok': False, 'synced': None, 'error': 'timedatectl nicht installiert'}
     except Exception as e:
         return {'ok': False, 'synced': None, 'error': str(e)[:120]}
 
@@ -834,9 +837,13 @@ def mqtt_publish_status(state):
                 msgs.append({'topic': f'{TOPIC_PREFIX}/diag/internet_ok',    'payload': '1' if state.get('diag_internet_ok') else '0',   'retain': True})
             if F5_TIME_MONITOR:
                 msgs.append({'topic': f'{TOPIC_PREFIX}/diag/time_synced',    'payload': '1' if state.get('diag_time_synced') else '0',   'retain': True})
+        # publish.multiple() kennt anders als publish.single() KEIN globales 'qos'-Argument –
+        # QoS wird stattdessen pro Nachricht über einen 'qos'-Key im jeweiligen Dict gesetzt
+        # (hier nicht gesetzt, Default ist dann 0 je Nachricht). Ein fälschlich übergebenes
+        # 'qos=0' als Funktionsargument führte zu einem TypeError bei JEDER Veröffentlichung.
         mqtt_publish_mod.multiple(
             msgs, hostname=broker, port=port, auth=auth,
-            client_id=f'HitWatch4Lox-{socket.gethostname()}', qos=0,
+            client_id=f'HitWatch4Lox-{socket.gethostname()}',
         )
     except Exception as e:
         log.warning(f'MQTT: Statusveröffentlichung fehlgeschlagen (unkritisch): {e}')
@@ -1159,7 +1166,12 @@ def run():
                 if F5_TIME_MONITOR:
                     ts = check_time_sync()
                     state['diag_time_synced'] = ts.get('synced')
-                    if ts['ok'] and ts['synced'] is False:
+                    if not ts['ok']:
+                        log.warning(
+                            'Zeit-Synchronisationsstatus nicht ermittelbar (timedatectl lieferte '
+                            f"keinen Wert): {ts.get('error', 'unbekannter Grund')}"
+                        )
+                    elif ts['synced'] is False:
                         log.warning(
                             'Systemzeit nicht synchronisiert (NTP)'
                             + (' – starte Zeit-Synchronisation neu...' if F5_TIME_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.')

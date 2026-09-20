@@ -1,10 +1,15 @@
 ## 📌 Projekt-Status
-- **Version:** 1.1 (2026-09-20: Neue Funktion 5 "System-Diagnose" – Speicher/RAM/CPU-Temperatur/
+- **Version:** 1.2 (2026-09-20: Live-Test von v1.1 zeigte sofort einen Regressions-Bug –
+  `mqtt_publish_status()` gab bei JEDER Veröffentlichung einen TypeError, weil
+  `publish.multiple()` anders als `publish.single()` kein globales `qos`-Argument kennt.
+  Fix verifiziert durch lokale Installation von `paho-mqtt` und Signaturprüfung. Nebenbei:
+  "Zeit-Synchronisation nicht ermittelbar" loggt jetzt den genauen `timedatectl`-Fehlgrund.)
+  Basiert auf v1.1 (2026-09-20): neue Funktion 5 "System-Diagnose" – Speicher/RAM/CPU-Temperatur/
   Internet/Zeit-Sync/weitere Kerndienste, jedes Thema einzeln im Monitoring UND Auto-Heal
   schaltbar. Dazu ein neues MQTT-Ampel-Topic (`health`/`health_detail`, fasst F1/F4/F5 zu einem
   Gesamtstatus zusammen) und ein sofortiges Event-Topic (`event`, nicht retained) bei jedem
   Neustart/Reboot statt erst beim nächsten Zyklus – auf Nutzerwunsch, um HitWatch4Lox als
-  zentrale "Ist alles grün?"-Quelle für Loxone bei vielen Kundenstandorten nutzbar zu machen.)
+  zentrale "Ist alles grün?"-Quelle für Loxone bei vielen Kundenstandorten nutzbar zu machen.
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (ursprünglich reiner Netbird-Watchdog, jetzt
   auch MQTT-Dienste) vollständig gebaut, als Framework von Unwetter4Lox übernommen (gleiche
   LoxBerry-Plugin-Konventionen: PHP-Webfrontend im iframe-isolierten `sl-`-Komponenten-Stil,
@@ -143,10 +148,22 @@
      `{action, label, success, detail, time, epoch}`, Label-Mapping über das neue
      `ACTION_LABELS`-Dict in Python (inhaltlich deckungsgleich mit `hw4l_action_label()` in
      `common.php`, aber separat gepflegt – Python kann PHP-Funktionen nicht aufrufen).
+- **v1.2 – Live-Test-Regression sofort behoben:** Erster Live-Test von v1.1 zeigte im Log
+  `multiple() got an unexpected keyword argument 'qos'` bei JEDER Statusveröffentlichung
+  (Ampel + alle Funktions-Topics, nicht nur die neuen Diagnose-Topics). Root Cause:
+  `paho.mqtt.publish.multiple()` hat – anders als `publish.single()`, das für das neue
+  Event-Topic genutzt wird – KEIN globales `qos`-Kwarg; QoS wird dort nur pro Nachricht per
+  `qos`-Key im jeweiligen Dict gesetzt. Fix per lokaler `paho-mqtt`-Installation und
+  `inspect.signature()` verifiziert, dann `qos=0` aus dem Aufruf entfernt. Zusätzlich:
+  `check_time_sync()` loggt jetzt bei einer leeren/fehlgeschlagenen `timedatectl`-Ausgabe den
+  genauen Grund (vorher stilles "nicht ermittelbar" ohne Diagnose-Möglichkeit).
 - **Noch offen:**
   - [ ] Funktion 5 (alle sechs Sub-Checks + Auto-Heal-Aktionen), die Health-Ampel und das
     Event-Topic sind mangels Linux-Testumgebung im Rahmen dieser Session nur isoliert
     (Funktionsebene, simulierter State) getestet, NICHT auf einem echten LoxBerry verifiziert.
+    Erster Live-Test bestätigte bereits Speicher/RAM/Internet-Anzeige als funktionierend; CPU-
+    Temperatur "nicht ermittelbar" ist auf Hardware ohne `thermal_zone0`/`vcgencmd` erwartet,
+    Zeit-Synchronisation "nicht ermittelbar" noch nicht mit dem neuen Diagnose-Log geklärt.
   - [ ] **Mit v0.9 erstmals wirklich testbar:** v0.6 (falscher Erkennungsweg) → v0.7 (Fehler
     unsichtbar) → v0.8 (falsche Auth-Keys) → v0.9 (Timeout-Bug) verhinderten jeweils einen echten
     Funktionstest von "Verbindung zu Mosquitto". Exakten `loxberry/mqttgateway`-Topic-Pfad daher
@@ -351,6 +368,10 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.2 (2026-09-20):** Live-Test-Regression aus v1.1 behoben: `mqtt_publish_status()` gab bei
+  jeder Veröffentlichung einen `TypeError` (`multiple() got an unexpected keyword argument
+  'qos'`) – `publish.multiple()` kennt kein globales `qos`-Argument, anders als `publish.single()`.
+  Zeit-Synchronisations-Check loggt jetzt den genauen Grund bei fehlgeschlagener Ermittlung.
 - **v1.1 (2026-09-20):** Neue Funktion 5 "System-Diagnose" (Speicher/RAM/CPU-Temperatur/Internet/
   Zeit-Sync/weitere Kerndienste, Monitoring UND Auto-Heal je einzeln schaltbar). Neues
   MQTT-Ampel-Topic (`health`/`health_detail`, fasst F1/F4/F5 zusammen) + Statusseiten-Banner.
