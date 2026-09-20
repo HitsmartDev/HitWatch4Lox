@@ -1,10 +1,13 @@
 ## 📌 Projekt-Status
-- **Version:** 1.3 (2026-09-20: Zweiter Live-Test-Fund – Zeit-Synchronisation UND
-  CPU-Temperatur zeigten dauerhaft "nicht ermittelbar". Root Cause Zeit-Sync: `timedatectl show
-  --value` nutzt ein Flag das erst ab systemd 230 existiert – umgestellt auf dasselbe
-  "Key=Value"-Parsing wie `get_service_state()`. CPU-Temperatur: probiert jetzt alle
-  `thermal_zone*` statt nur `zone0`, UND loggt bei echtem Fehlschlag jetzt einmalig den genauen
-  Grund statt still zu bleiben.)
+- **Version:** 1.4 (2026-09-20: v1.3 lieferte den entscheidenden Log-Hinweis `RC=0, keine
+  Ausgabe` für die Zeit-Sync – Ursache war eine erfundene D-Bus-Property
+  `SystemClockSynchronized`, die es im `timedate1`-Interface gar nicht gibt (nur
+  `NTPSynchronized`); eine einzelne ungültige Property in der Liste ließ `timedatectl show`
+  komplett leer zurückkehren. Jetzt nur noch die echte Property + Fallback auf `timedatectl
+  status`-Textparsing. CPU-Temperatur bleibt beim Nutzer "nicht ermittelbar" – Log bestätigt
+  explizit weder `thermal_zone*` noch `vcgencmd` vorhanden, plausibel eine virtualisierte
+  LoxBerry-Instanz ohne durchgereichten Sensor, softwareseitig nicht behebbar. Zusätzlich:
+  Hilfe-Seite überarbeitet mit vollständiger MQTT-Topic-Referenz inkl. aller möglichen Werte.)
   Basiert auf v1.2 (2026-09-20): Live-Test von v1.1 zeigte einen Regressions-Bug –
   `mqtt_publish_status()` gab bei JEDER Veröffentlichung einen TypeError, weil
   `publish.multiple()` anders als `publish.single()` kein globales `qos`-Argument kennt.
@@ -178,13 +181,31 @@
      als ein zwischenzeitlich abgestürzter Dienst) – beide neuen Diagnose-Logs feuern daher nur
      EINMAL pro Daemon-Lauf (`_temp_unavailable_logged`/`_time_unavailable_logged`-Flags in
      `run()`, zurückgesetzt sobald die Ermittlung wieder erfolgreich ist).
+- **v1.4 – Dritter Live-Test-Fund, echter Root Cause der Zeit-Sync gefunden:** Der v1.3-Log
+  (`RC=0, keine Ausgabe`) war der entscheidende Hinweis, nicht nur eine weitere Symptom-
+  Beschreibung. Ursache: `check_time_sync()` fragte `--property=NTPSynchronized,
+  SystemClockSynchronized` ab – `SystemClockSynchronized` ist KEINE echte Property des
+  `org.freedesktop.timedate1`-D-Bus-Interfaces (nur `NTPSynchronized` existiert dort; das
+  Textlabel "System clock synchronized" aus `timedatectl status` bildet ebenfalls nur diese
+  eine Property ab, keine zweite). Vermutlich lässt eine ungültige Property in der Liste
+  `timedatectl show` auf diesem System komplett leer zurückkehren statt nur die gültige zu
+  liefern. Fix: nur noch `NTPSynchronized` abfragen, zusätzlich ein Fallback auf
+  `timedatectl status`-Textparsing (Regex auf "System clock synchronized: yes/no") falls
+  `show` dennoch nichts liefert (z.B. bei eingeschränktem D-Bus-Zugriff in manchen Containern).
+  CPU-Temperatur wurde NICHT weiter "repariert" – das Log bestätigt zweifelsfrei, dass weder
+  ein `thermal_zone*`-Pfad noch `vcgencmd` auf diesem System existiert, was für eine
+  virtualisierte Instanz (kein Sensor-Passthrough vom Hypervisor) ein korrektes, ehrliches
+  Ergebnis ist statt eines Bugs.
+  Zusätzlich auf Nutzerwunsch: Hilfe-Seite massiv erweitert (vollständige MQTT-Topic-Referenz
+  inkl. aller Ampel-/systemd-/Event-Action-Werte, nicht nur Typen).
 - **Noch offen:**
   - [ ] Funktion 5 (alle sechs Sub-Checks + Auto-Heal-Aktionen), die Health-Ampel und das
     Event-Topic sind mangels Linux-Testumgebung nur isoliert (Funktionsebene, simulierter State)
     getestet worden, nicht vollständig auf einem echten LoxBerry. Live-Test bestätigte bereits
-    Speicher/RAM/Internet-Anzeige und die MQTT-Ampel als funktionierend (nach v1.2-Fix). Ob
-    Zeit-Sync/CPU-Temperatur nach v1.3 beim Nutzer tatsächlich einen Wert liefern (oder ob die
-    Hardware schlicht keinen Sensor hat) steht noch aus.
+    Speicher/RAM/Internet-Anzeige und die MQTT-Ampel als funktionierend. Zeit-Sync nach v1.4 vom
+    Nutzer noch nicht verifiziert. CPU-Temperatur wird auf diesem konkreten (vermutlich
+    virtualisierten) Gerät vermutlich dauerhaft "nicht ermittelbar" bleiben – kein weiterer
+    Fixversuch geplant, da kein Sensor vorhanden ist.
   - [ ] **Mit v0.9 erstmals wirklich testbar:** v0.6 (falscher Erkennungsweg) → v0.7 (Fehler
     unsichtbar) → v0.8 (falsche Auth-Keys) → v0.9 (Timeout-Bug) verhinderten jeweils einen echten
     Funktionstest von "Verbindung zu Mosquitto". Exakten `loxberry/mqttgateway`-Topic-Pfad daher
@@ -389,6 +410,11 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.4 (2026-09-20):** Echter Root Cause der Zeit-Sync-Ermittlung gefunden: eine nicht
+  existente D-Bus-Property `SystemClockSynchronized` in der Abfrageliste ließ `timedatectl show`
+  komplett leer zurückkehren – jetzt nur noch die echte Property `NTPSynchronized` + Fallback
+  auf `timedatectl status`-Textparsing. Hilfe-Seite um eine vollständige MQTT-Topic-Referenz
+  inkl. aller möglichen Werte (Ampel, systemd-Zustände, Event-Actions) erweitert.
 - **v1.3 (2026-09-20):** Zeit-Synchronisation UND CPU-Temperatur zeigten weiterhin "nicht
   ermittelbar" nach v1.2. Root Cause Zeit-Sync: `timedatectl show --value` (Flag erst ab systemd
   230) – umgestellt auf dasselbe "Key=Value"-Parsing wie `get_service_state()`. CPU-Temperatur:

@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.3'
+DAEMON_VERSION = '1.4'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -626,22 +626,29 @@ def check_cpu_temperature():
 def check_time_sync():
     """Nutzt systemds eigene Sync-Bewertung (timedatectl) statt selbst eine NTP-Abfrage zu
     bauen. Parst 'Key=Value'-Zeilen aus 'timedatectl show' OHNE das --value-Flag (das gibt es
-    erst ab systemd 230, 2016) – dasselbe robuste Muster wie get_service_state() weiter oben
-    (dort per 'systemctl show ... --property=...' bereits nachweislich funktionsfähig)."""
+    erst ab systemd 230, 2016) – dasselbe robuste Muster wie get_service_state() weiter oben.
+    WICHTIG: Die einzige echte Property im 'org.freedesktop.timedate1'-D-Bus-Interface heißt
+    'NTPSynchronized' – ein früherer Versuch fragte zusätzlich ein nicht-existentes
+    'SystemClockSynchronized' ab; eine einzelne ungültige Property in der Liste ließ
+    'timedatectl show' auf manchen Systemen komplett LEER zurückkehren (RC=0, keine Ausgabe)
+    statt nur die gültige Property zu liefern."""
     try:
         r = subprocess.run(
-            ['timedatectl', 'show', '--property=NTPSynchronized,SystemClockSynchronized'],
+            ['timedatectl', 'show', '--property=NTPSynchronized'],
             capture_output=True, text=True, timeout=10,
         )
-        props = {}
         for line in r.stdout.splitlines():
-            if '=' in line:
-                k, v = line.split('=', 1)
-                props[k.strip()] = v.strip().lower()
-        if not props:
-            err = (r.stderr or r.stdout or f'RC={r.returncode}, keine Ausgabe').strip()[:150]
-            return {'ok': False, 'synced': None, 'error': err}
-        return {'ok': True, 'synced': any(v == 'yes' for v in props.values())}
+            if line.startswith('NTPSynchronized='):
+                return {'ok': True, 'synced': line.split('=', 1)[1].strip().lower() == 'yes'}
+        # Fallback: 'timedatectl status' ist die klassische, textbasierte Ausgabe und liefert
+        # auf praktisch jedem System (auch mit eingeschränktem D-Bus-Zugriff, z.B. in manchen
+        # LXC-Containern) zumindest die Zeile "System clock synchronized: yes/no".
+        r2 = subprocess.run(['timedatectl', 'status'], capture_output=True, text=True, timeout=10)
+        m = re.search(r'System clock synchronized:\s*(\w+)', r2.stdout, re.IGNORECASE)
+        if m:
+            return {'ok': True, 'synced': m.group(1).strip().lower() == 'yes'}
+        err = (r.stderr or r2.stderr or r2.stdout or f'RC={r.returncode}, keine Ausgabe').strip()[:150]
+        return {'ok': False, 'synced': None, 'error': err}
     except FileNotFoundError:
         return {'ok': False, 'synced': None, 'error': 'timedatectl nicht installiert'}
     except Exception as e:

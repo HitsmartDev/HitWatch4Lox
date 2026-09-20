@@ -5,6 +5,30 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.4] – 2026-09-20
+
+### Behoben – Zeit-Synchronisation weiterhin "nicht ermittelbar" (echter Root Cause gefunden)
+- v1.3 lieferte den entscheidenden Log-Hinweis: `RC=0, keine Ausgabe`. Ursache: der Aufruf
+  fragte zusätzlich zur echten Property `NTPSynchronized` eine nicht-existente
+  `SystemClockSynchronized`-Property ab (Verwechslung mit dem gleichnamigen Textlabel aus
+  `timedatectl status`, das aber tatsächlich `NTPSynchronized` abbildet) – im
+  `org.freedesktop.timedate1`-D-Bus-Interface gibt es nur `NTPSynchronized`. Eine ungültige
+  Property in der Liste ließ `timedatectl show` komplett leer zurückkehren. Fix: nur noch die
+  echte Property abfragen, zusätzlich ein Fallback auf `timedatectl status` (Textausgabe,
+  funktioniert auch mit eingeschränktem D-Bus-Zugriff) falls `show` dennoch nichts liefert.
+- CPU-Temperatur bleibt auf dem getesteten Gerät "nicht ermittelbar" – das Log bestätigt
+  explizit weder `thermal_zone*` noch `vcgencmd` vorhanden, was für eine virtualisierte
+  LoxBerry-Instanz (kein durchgereichter Sensor) ein legitimer, softwareseitig nicht
+  behebbarer Zustand ist, kein Bug.
+
+### Geändert – Hilfe-Seite: vollständige MQTT-Topic-Referenz
+- Die MQTT-Topics-Sektion dokumentiert jetzt für jedes Topic die exakten möglichen Werte
+  (nicht nur den Typ), inkl. aller systemd-ActiveState/SubState-Werte für Mosquitto, aller
+  `action`-Werte des neuen Event-Topics mit Klartext-Label und auslösender Funktion, und der
+  drei Ampel-Zustände mit Bedeutung.
+
+---
+
 ## [1.3] – 2026-09-20
 
 ### Behoben – Zeit-Synchronisation & CPU-Temperatur dauerhaft "nicht ermittelbar" (Live-Test)

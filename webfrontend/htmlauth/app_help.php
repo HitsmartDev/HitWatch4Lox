@@ -238,48 +238,89 @@ der Daemon (<code>loxberry</code>) läuft, genügen unprivilegierte <code>pgrep<
 <details class="sl-details">
 <summary>📡 MQTT Topics (optionale Statusanzeige)</summary>
 <div class="sl-details-body">
-<p>Standard-Präfix: <code>HitWatch/netbird_watchdog/</code> (konfigurierbar). Rein informativ –
-bei MQTT-Ausfall läuft die Watchdog-Logik unverändert weiter, da jede Veröffentlichung als
-kurzlebige Verbindung (connect → publish → disconnect) erfolgt, nicht als Dauerverbindung.</p>
-<p><b>🚦 Ampel (<code>health</code>/<code>health_detail</code>):</b> fasst Funktion 1/4/5 zu einem
-einzigen Gesamtstatus zusammen – für eine Ein-Blick-Übersicht über viele Standorte in Loxone,
-ohne dass man jedes Einzel-Topic selbst auswerten muss.</p>
-<p><b>⚡ Event (<code>event</code>, NICHT retained):</b> wird <b>sofort</b> bei jedem Dienst-/
-Prozess-Neustart oder Reboot veröffentlicht (nicht erst beim nächsten Prüfzyklus) – JSON-Payload
-mit Aktion, Klartext-Label, Erfolg, Detail und Zeitpunkt. Für eine Loxone-Benachrichtigung "es
-wurde gerade etwas neugestartet" in Echtzeit, z.B. per Loxone-MQTT-Virtual-Input auf dieses Topic
-+ eine Formel/einen Baustein der bei jeder Nachricht (nicht nur bei Wertänderung) einen Alarm
-auslöst.</p>
-<table class="sl-mqtt-tbl"><thead><tr><th>Topic</th><th>Werte</th><th>Bedeutung</th></tr></thead><tbody>
-<tr><td><code>health</code></td><td>green/yellow/red</td><td>Gesamtstatus – rot bei kritischen Problemen (z.B. Netbird/Mosquitto/Gateway down, kein Internet), gelb bei Warnungen (z.B. Speicher knapp), grün sonst</td></tr>
-<tr><td><code>health_detail</code></td><td>Text</td><td>Klartext-Liste der aktuellen Probleme, "Alles OK" wenn keine</td></tr>
-<tr><td><code>event</code></td><td>JSON, <b>nicht</b> retained</td><td>Sofort bei jeder Aktion: <code>{action, label, success, detail, time, epoch}</code></td></tr>
-<tr><td><code>status</code></td><td>Text</td><td>"OK" oder Fehlertext</td></tr>
-<tr><td><code>connected</code></td><td>0 / 1</td><td>Netbird aktuell verbunden</td></tr>
-<tr><td><code>management</code></td><td>Text</td><td>Management-Verbindungsstatus aus <code>netbird status --detail</code></td></tr>
-<tr><td><code>signal</code></td><td>Text</td><td>Signal-Verbindungsstatus aus <code>netbird status --detail</code></td></tr>
-<tr><td><code>last_check_epoch</code></td><td>Unix-TS</td><td>Zeitpunkt der letzten Prüfung</td></tr>
-<tr><td><code>last_restart_epoch</code></td><td>Unix-TS</td><td>Zeitpunkt des letzten Dienst-Neustarts</td></tr>
-<tr><td><code>restart_count_total</code></td><td>Zahl</td><td>Dienst-Neustarts seit Daemon-Start</td></tr>
-<tr><td><code>last_reboot_epoch</code></td><td>Unix-TS</td><td>Zeitpunkt des letzten automatischen Reboots</td></tr>
-<tr><td><code>last_reboot_reason</code></td><td>Text</td><td><code>netbird_watchdog</code> oder <code>scheduled_reboot</code></td></tr>
-<tr><td><code>cooldown_active</code></td><td>0 / 1</td><td>Reboot-Cooldown aktuell aktiv</td></tr>
-<tr><td><code>cooldown_remaining_min</code></td><td>Minuten</td><td>Verbleibende Cooldown-Zeit</td></tr>
-<tr><td><code>mosquitto/healthy</code></td><td>0 / 1</td><td>Nur wenn Funktion 4 aktiv – Dienststatus + TCP-Check kombiniert</td></tr>
-<tr><td><code>mosquitto/active_state</code></td><td>Text</td><td>systemd ActiveState (active/activating/failed/…)</td></tr>
-<tr><td><code>mosquitto/sub_state</code></td><td>Text</td><td>systemd SubState (running/start/…)</td></tr>
-<tr><td><code>mosquitto/restart_count</code></td><td>Zahl</td><td>Mosquitto-Neustarts seit Daemon-Start</td></tr>
-<tr><td><code>gateway/healthy</code></td><td>0 / 1</td><td>Nur wenn Funktion 4 aktiv – Prozess läuft + (falls prüfbar) mit Mosquitto verbunden</td></tr>
-<tr><td><code>gateway/active_state</code></td><td>Text</td><td>"active"/"inactive" – synthetisch aus <code>pgrep</code>, kein echter systemd-Status</td></tr>
-<tr><td><code>gateway/sub_state</code></td><td>Text</td><td>"running"/"dead" – synthetisch aus <code>pgrep</code></td></tr>
-<tr><td><code>gateway/restart_count</code></td><td>Zahl</td><td>Gateway-Neustarts (Prozess beendet, LoxBerry respawnt) seit Daemon-Start</td></tr>
-<tr><td><code>gateway/broker_linked</code></td><td>0 / 1</td><td>Gateway meldet selbst "Connected" zu Mosquitto (aus dessen eigenem MQTT-Status-Topic)</td></tr>
-<tr><td><code>diag/disk_percent</code></td><td>%</td><td>Nur wenn Funktion 5 + Speicher-Monitoring aktiv</td></tr>
-<tr><td><code>diag/memory_percent</code></td><td>%</td><td>Nur wenn Funktion 5 + RAM-Monitoring aktiv</td></tr>
-<tr><td><code>diag/temp_c</code></td><td>°C</td><td>Nur wenn Funktion 5 + Temperatur-Monitoring aktiv UND Sensor lesbar</td></tr>
-<tr><td><code>diag/internet_ok</code></td><td>0 / 1</td><td>Nur wenn Funktion 5 + Internet-Monitoring aktiv</td></tr>
-<tr><td><code>diag/time_synced</code></td><td>0 / 1</td><td>Nur wenn Funktion 5 + Zeit-Monitoring aktiv</td></tr>
+<p>Standard-Präfix: <code>HitWatch/netbird_watchdog/</code> (konfigurierbar in den Einstellungen).
+Alle Topic-Namen unten sind relativ zu diesem Präfix zu lesen, z.B. wird aus <code>health</code>
+tatsächlich <code>HitWatch/netbird_watchdog/health</code> veröffentlicht.</p>
+<p>Rein informativ – bei MQTT-Ausfall läuft die Watchdog-Logik unverändert weiter. Alle Topics
+<b>außer <code>event</code></b> sind <code>retain=true</code> (ein neu verbundener Client sieht
+sofort den letzten Stand) und werden bei jedem Hauptschleifen-Durchlauf neu veröffentlicht (kurze
+Kurzverbindung: connect → publish → disconnect, keine Dauerverbindung, QoS 0). Topics einer
+Funktion erscheinen nur, wenn diese Funktion aktiv ist (z.B. <code>mosquitto/*</code> nur wenn
+Funktion 4 an ist).</p>
+
+<h4 style="margin:1rem 0 0.3rem">🚦 Ampel – <code>health</code> / <code>health_detail</code></h4>
+<p>Fasst Funktion 1 (Netbird), Funktion 4 (Mosquitto/Gateway) und Funktion 5 (System-Diagnose) zu
+einem einzigen Gesamtstatus zusammen – für eine Ein-Blick-Übersicht über viele Kundenstandorte in
+Loxone, ohne dass man jedes Einzel-Topic selbst auswerten muss. Wird bei <b>jedem</b> Loop-Tick neu
+berechnet und veröffentlicht, ist also nie älter als die letzte Statusveröffentlichung.</p>
+<table class="sl-mqtt-tbl"><thead><tr><th><code>health</code>-Wert</th><th>Bedeutung</th></tr></thead><tbody>
+<tr><td><code>green</code></td><td>Alles OK – kein aktives Problem. <code>health_detail</code> = "Alles OK"</td></tr>
+<tr><td><code>yellow</code></td><td>Nur Warnungen (z.B. Speicherplatz/RAM/Temperatur im Warnbereich), nichts Kritisches</td></tr>
+<tr><td><code>red</code></td><td>Mindestens ein kritisches Problem (z.B. Netbird/Mosquitto/Gateway getrennt, kein Internet, Speicher/Temperatur kritisch, ein Kern-Dienst aus Funktion 5 down)</td></tr>
 </tbody></table>
+<p class="sl-hint"><code>health_detail</code> ist bei <code>yellow</code>/<code>red</code> eine
+mit "; " getrennte Klartext-Liste aller aktuell zutreffenden Probleme, z.B. <code>"Speicher
+kritisch (97%); Kein Internet"</code>.</p>
+
+<h4 style="margin:1rem 0 0.3rem">⚡ Sofort-Event – <code>event</code> (NICHT retained)</h4>
+<p>Wird <b>sofort</b> bei jedem Dienst-/Prozess-Neustart oder Reboot veröffentlicht – unabhängig
+vom nächsten regulären Prüfzyklus, der je nach Prüfintervall erst Minuten später käme. Bewusst
+<b>nicht retained</b>: ein neu verbundener Client soll nicht die letzte (evtl. alte) Aktion sofort
+präsentiert bekommen, sondern nur künftige Aktionen live mitbekommen – ideal für eine
+Loxone-Benachrichtigung "es wurde gerade etwas neugestartet" in Echtzeit (z.B. MQTT Virtual Input
++ ein Baustein, der bei <b>jeder</b> Nachricht auslöst, nicht nur bei Wertänderung).</p>
+<p>JSON-Payload: <code>{"action": "…", "label": "…", "success": true|false, "detail": "…",
+"time": "TT.MM.JJJJ HH:MM:SS", "epoch": 1234567890}</code></p>
+<table class="sl-mqtt-tbl"><thead><tr><th><code>action</code>-Wert</th><th><code>label</code> (Klartext im Payload)</th><th>Ausgelöst von</th></tr></thead><tbody>
+<tr><td><code>netbird_restart</code></td><td>Netbird-Dienst neu gestartet</td><td>Funktion 1</td></tr>
+<tr><td><code>mosquitto_restart</code></td><td>Mosquitto neu gestartet</td><td>Funktion 4</td></tr>
+<tr><td><code>gateway_restart</code></td><td>MQTT-Gateway neu gestartet</td><td>Funktion 4</td></tr>
+<tr><td><code>netbird_watchdog</code></td><td>Automatischer Reboot (Netbird-Eskalation)</td><td>Funktion 2</td></tr>
+<tr><td><code>scheduled_reboot</code></td><td>Automatischer Reboot (Zeitplan)</td><td>Funktion 3</td></tr>
+<tr><td><code>diag_internet_restart</code></td><td>Netzwerk neu gestartet (Internet-Ausfall)</td><td>Funktion 5</td></tr>
+<tr><td><code>diag_time_restart</code></td><td>Zeit-Synchronisation neu gestartet</td><td>Funktion 5</td></tr>
+<tr><td><code>diag_service_restart</code></td><td>Dienst neu gestartet</td><td>Funktion 5 (Dienstname steht im <code>detail</code>-Feld)</td></tr>
+</tbody></table>
+<p class="sl-hint"><code>success</code> ist bei einem Reboot (<code>netbird_watchdog</code>/
+<code>scheduled_reboot</code>) zunächst optimistisch <code>true</code> (die Reboot-<b>Anfrage</b>
+wurde gestellt, bevor das System tatsächlich herunterfährt) – nur wenn der Root-Helper-Aufruf
+selbst fehlschlägt, wird <code>false</code> korrigiert und im nächsten Prüfzyklus erneut versucht.</p>
+
+<h4 style="margin:1rem 0 0.3rem">📋 Alle Topics im Überblick</h4>
+<table class="sl-mqtt-tbl"><thead><tr><th>Topic</th><th>Werte</th><th>Bedeutung</th></tr></thead><tbody>
+<tr><td><code>health</code></td><td><code>green</code> / <code>yellow</code> / <code>red</code></td><td>Ampel – siehe oben</td></tr>
+<tr><td><code>health_detail</code></td><td>Text</td><td>Klartext-Problemliste, "Alles OK" wenn keine</td></tr>
+<tr><td><code>event</code></td><td>JSON, <b>nicht</b> retained</td><td>Sofort bei jeder Aktion – siehe oben</td></tr>
+<tr><td><code>status</code></td><td>"OK" oder Fehlertext</td><td>Funktion 1 – letzter Prüf-Fehlertext (z.B. wenn <code>netbird status</code> selbst fehlschlägt)</td></tr>
+<tr><td><code>connected</code></td><td><code>0</code> / <code>1</code></td><td>Netbird aktuell verbunden (Management UND Signal)</td></tr>
+<tr><td><code>management</code></td><td>Text, z.B. "Connected"/"Disconnected"</td><td>Management-Verbindungsstatus aus <code>netbird status --detail</code></td></tr>
+<tr><td><code>signal</code></td><td>Text, z.B. "Connected"/"Disconnected"</td><td>Signal-Verbindungsstatus aus <code>netbird status --detail</code></td></tr>
+<tr><td><code>last_check_epoch</code></td><td>Unix-Zeitstempel</td><td>Zeitpunkt der letzten Netbird-Prüfung</td></tr>
+<tr><td><code>last_restart_epoch</code></td><td>Unix-Zeitstempel</td><td>Zeitpunkt des letzten Netbird-Dienst-Neustarts</td></tr>
+<tr><td><code>restart_count_total</code></td><td>Zahl ≥ 0</td><td>Netbird-Dienst-Neustarts seit Daemon-Start</td></tr>
+<tr><td><code>last_reboot_epoch</code></td><td>Unix-Zeitstempel</td><td>Zeitpunkt des letzten automatischen Reboots (Funktion 2 oder 3)</td></tr>
+<tr><td><code>last_reboot_reason</code></td><td><code>netbird_watchdog</code> / <code>scheduled_reboot</code> / leer</td><td>Welcher Mechanismus zuletzt gebootet hat</td></tr>
+<tr><td><code>cooldown_active</code></td><td><code>0</code> / <code>1</code></td><td>Reboot-Cooldown (Funktion 2+3 gemeinsam) aktuell aktiv</td></tr>
+<tr><td><code>cooldown_remaining_min</code></td><td>Minuten ≥ 0</td><td>Verbleibende Cooldown-Zeit</td></tr>
+<tr><td><code>mosquitto/healthy</code></td><td><code>0</code> / <code>1</code></td><td>Nur wenn Funktion 4 aktiv – Dienststatus UND TCP-Check kombiniert</td></tr>
+<tr><td><code>mosquitto/active_state</code></td><td>systemd ActiveState: <code>active</code> / <code>activating</code> / <code>deactivating</code> / <code>inactive</code> / <code>failed</code> / <code>reloading</code></td><td>Roher systemd-Zustand des Mosquitto-Dienstes</td></tr>
+<tr><td><code>mosquitto/sub_state</code></td><td>systemd SubState, z.B. <code>running</code> / <code>dead</code> / <code>start</code> / <code>failed</code></td><td>Feinerer systemd-Unterzustand (z.B. "start" während der Dienst gerade hochfährt)</td></tr>
+<tr><td><code>mosquitto/restart_count</code></td><td>Zahl ≥ 0</td><td>Mosquitto-Neustarts seit Daemon-Start</td></tr>
+<tr><td><code>gateway/healthy</code></td><td><code>0</code> / <code>1</code></td><td>Nur wenn Funktion 4 aktiv – Prozess läuft UND (falls prüfbar) mit Mosquitto verbunden</td></tr>
+<tr><td><code>gateway/active_state</code></td><td><code>active</code> / <code>inactive</code></td><td>Synthetisch aus <code>pgrep</code> abgeleitet (Gateway ist kein systemd-Dienst), kein echter systemd-Wert</td></tr>
+<tr><td><code>gateway/sub_state</code></td><td><code>running</code> / <code>dead</code></td><td>Ebenfalls synthetisch aus <code>pgrep</code></td></tr>
+<tr><td><code>gateway/restart_count</code></td><td>Zahl ≥ 0</td><td>Gateway-Prozess beendet (LoxBerry respawnt normalerweise selbst) seit Daemon-Start</td></tr>
+<tr><td><code>gateway/broker_linked</code></td><td><code>0</code> / <code>1</code></td><td>Gateway meldet selbst "Connected" zu Mosquitto (aus dessen eigenem MQTT-Status-Topic, siehe Funktion 4)</td></tr>
+<tr><td><code>diag/disk_percent</code></td><td>0–100 (%)</td><td>Nur bei Funktion 5 + Speicher-Monitoring aktiv – Füllstand der Root-Partition</td></tr>
+<tr><td><code>diag/memory_percent</code></td><td>0–100 (%)</td><td>Nur bei Funktion 5 + RAM-Monitoring aktiv</td></tr>
+<tr><td><code>diag/temp_c</code></td><td>Zahl (°C)</td><td>Nur bei Funktion 5 + Temperatur-Monitoring aktiv UND Sensor lesbar – fehlt das Topic komplett, war kein Sensor auffindbar (z.B. auf mancher virtualisierter Hardware)</td></tr>
+<tr><td><code>diag/internet_ok</code></td><td><code>0</code> / <code>1</code></td><td>Nur bei Funktion 5 + Internet-Monitoring aktiv – TCP-Erreichbarkeit des konfigurierten Prüfziels</td></tr>
+<tr><td><code>diag/time_synced</code></td><td><code>0</code> / <code>1</code></td><td>Nur bei Funktion 5 + Zeit-Monitoring aktiv – laut <code>timedatectl</code> NTP-synchronisiert</td></tr>
+</tbody></table>
+<p class="sl-hint">Die Kern-Dienste aus Funktion 5 (<code>SERVICES_LIST</code>) sowie einzelne
+Detailtexte (z.B. <code>gateway_broker_detail</code>, Fehlergründe bei nicht ermittelbaren
+Diagnose-Werten) werden aktuell NICHT als eigene MQTT-Topics veröffentlicht, nur im Status-Tab
+und im Daemon-Log – bei Bedarf gerne als Erweiterung ergänzbar.</p>
 </div>
 </details>
 
