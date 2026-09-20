@@ -9,10 +9,14 @@
 # Aufrufe frei (siehe dort).
 #
 # EINZIGE Ausnahme mit einem vom Nutzer beeinflussten Argument: "restart_service <name>"
-# (Funktion 4, Mosquitto). Dienstname aus den Plugin-Einstellungen (je nach LoxBerry-Setup
-# unterschiedlich). Wird hier UND vom Python-Daemon gegen ein striktes Muster (nur
-# Buchstaben/Ziffern/._@-) validiert, bevor er an systemctl übergeben wird. Kein
-# Shell-Passthrough, keine Sonderzeichen, kein "ALL" in sudoers.
+# (Funktion 4 Mosquitto, Funktion 5 weitere Kerndienste). Dienstname aus den Plugin-
+# Einstellungen (je nach LoxBerry-Setup unterschiedlich). Wird hier UND vom Python-Daemon
+# gegen ein striktes Muster (nur Buchstaben/Ziffern/._@-) validiert, bevor er an systemctl
+# übergeben wird. Kein Shell-Passthrough, keine Sonderzeichen, kein "ALL" in sudoers.
+#
+# "restart_networking" und "sync_time" (Funktion 5 Auto-Heal, System-Diagnose) sind feste
+# Unterbefehle OHNE Argument – bewusst auf Neustart eines bestehenden Dienstes beschränkt,
+# KEIN Remounten von Dateisystemen o.ä. (zu riskant für unbeaufsichtigte Kundenstandorte).
 #
 # Das LoxBerry MQTT-Gateway (mqttgateway.pl) ist bewusst NICHT Teil dieses Root-Helpers – es
 # ist kein systemd-Dienst, sondern ein LoxBerry-Kern-Daemon. Der Python-Daemon prüft/beendet
@@ -84,8 +88,40 @@ case "$ACTION" in
         systemctl restart "$SVC"
         exit $?
         ;;
+    restart_networking)
+        # Funktion 5 Auto-Heal (Internet-Erreichbarkeit): versucht der Reihe nach die auf
+        # LoxBerry-Systemen üblichen Netzwerk-Dienste. Kein Interface-Down/Up-Gebastel –
+        # nur ein regulärer Dienst-Neustart.
+        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q "^dhcpcd\.service"; then
+            systemctl restart dhcpcd
+            exit $?
+        fi
+        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q "^networking\.service"; then
+            systemctl restart networking
+            exit $?
+        fi
+        echo "Weder dhcpcd- noch networking-Dienst gefunden" >&2
+        exit 127
+        ;;
+    sync_time)
+        # Funktion 5 Auto-Heal (Zeit-Synchronisation): NTP wieder aktivieren + Zeitdienst
+        # neu starten, mit ntpdate als letztem Fallback.
+        if command -v timedatectl >/dev/null 2>&1; then
+            timedatectl set-ntp true 2>/dev/null
+        fi
+        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q "^systemd-timesyncd\.service"; then
+            systemctl restart systemd-timesyncd
+            exit $?
+        fi
+        if command -v ntpdate >/dev/null 2>&1; then
+            ntpdate -u pool.ntp.org
+            exit $?
+        fi
+        echo "Weder systemd-timesyncd noch ntpdate verfügbar" >&2
+        exit 127
+        ;;
     *)
-        echo "Verwendung: $0 {check|restart|reboot|restart_service <name>}" >&2
+        echo "Verwendung: $0 {check|restart|reboot|restart_service <name>|restart_networking|sync_time}" >&2
         exit 1
         ;;
 esac

@@ -24,6 +24,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $f4_en   = isset($_POST['f4_enabled']) ? '1' : '0';
         $f4_mosq_auto = isset($_POST['f4_mosquitto_autorestart']) ? '1' : '0';
         $f4_gw_auto   = isset($_POST['f4_gateway_autorestart']) ? '1' : '0';
+        $f5_en          = isset($_POST['f5_enabled']) ? '1' : '0';
+        $f5_disk_mon    = isset($_POST['f5_disk_monitor']) ? '1' : '0';
+        $f5_mem_mon     = isset($_POST['f5_memory_monitor']) ? '1' : '0';
+        $f5_temp_mon    = isset($_POST['f5_temp_monitor']) ? '1' : '0';
+        $f5_inet_mon    = isset($_POST['f5_internet_monitor']) ? '1' : '0';
+        $f5_inet_heal   = isset($_POST['f5_internet_autoheal']) ? '1' : '0';
+        $f5_time_mon    = isset($_POST['f5_time_monitor']) ? '1' : '0';
+        $f5_time_heal   = isset($_POST['f5_time_autoheal']) ? '1' : '0';
+        $f5_svc_mon     = isset($_POST['f5_services_monitor']) ? '1' : '0';
+        $f5_svc_heal    = isset($_POST['f5_services_autoheal']) ? '1' : '0';
         $mqtt_en = isset($_POST['mqtt_enabled']) ? '1' : '0';
         $use_lb_new = isset($_POST['use_lb_mqtt']) ? '1' : '0';
 
@@ -44,6 +54,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!preg_match($pattern_re, $gw_pattern)) $gw_pattern = 'mqttgateway.pl';
         $gw_mqtt_prefix = trim($_POST['f4_gateway_mqtt_prefix'] ?? 'loxberry/mqttgateway', " \t\n\r\0\x0B/");
         if ($gw_mqtt_prefix === '') $gw_mqtt_prefix = 'loxberry/mqttgateway';
+
+        // Funktion 5: Schwellwerte, Internet-Check-Ziel, Dienstliste (jeder Eintrag validiert
+        // wie ein systemd-Dienstname – dieselbe Regel wie f4_mosquitto_service oben, da die
+        // Namen an denselben Root-Helper "restart_service <name>" übergeben werden).
+        $f5_disk_warn  = max(1, min(99,  intval($_POST['f5_disk_warn']   ?? 85)));
+        $f5_disk_crit  = max($f5_disk_warn, min(100, intval($_POST['f5_disk_crit'] ?? 95)));
+        $f5_mem_warn   = max(1, min(100, intval($_POST['f5_memory_warn'] ?? 90)));
+        $f5_temp_warn  = max(1, min(120, intval($_POST['f5_temp_warn']   ?? 70)));
+        $f5_temp_crit  = max($f5_temp_warn, min(120, intval($_POST['f5_temp_crit'] ?? 80)));
+        $f5_inet_host  = strip_tags(trim($_POST['f5_internet_host'] ?? '1.1.1.1')) ?: '1.1.1.1';
+        $f5_inet_port  = max(1, min(65535, intval($_POST['f5_internet_port'] ?? 53)));
+        $f5_svc_list = [];
+        foreach (explode(',', $_POST['f5_services_list'] ?? '') as $s) {
+            $s = trim($s);
+            if ($s !== '' && preg_match($svc_re, $s)) $f5_svc_list[] = $s;
+        }
+        $f5_svc_list_str = implode(',', $f5_svc_list);
 
         // Mehrere Wochentage: Checkboxen f3_weekday_1..f3_weekday_7 (ISO: 1=Mo .. 7=So)
         $weekdays = [];
@@ -85,6 +112,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $c .= "GATEWAY_PROCESS_PATTERN={$gw_pattern}\n";
         $c .= "GATEWAY_MQTT_PREFIX={$gw_mqtt_prefix}\n\n";
 
+        $c .= "[SYSTEM_DIAGNOSTICS]\n";
+        $c .= "ENABLED={$f5_en}\n";
+        $c .= 'CHECK_INTERVAL=' . max(30, min(3600, intval($_POST['f5_check_interval'] ?? 120))) . "\n";
+        $c .= "DISK_MONITOR={$f5_disk_mon}\n";
+        $c .= "DISK_WARN_PERCENT={$f5_disk_warn}\n";
+        $c .= "DISK_CRIT_PERCENT={$f5_disk_crit}\n";
+        $c .= "MEMORY_MONITOR={$f5_mem_mon}\n";
+        $c .= "MEMORY_WARN_PERCENT={$f5_mem_warn}\n";
+        $c .= "TEMP_MONITOR={$f5_temp_mon}\n";
+        $c .= "TEMP_WARN_C={$f5_temp_warn}\n";
+        $c .= "TEMP_CRIT_C={$f5_temp_crit}\n";
+        $c .= "INTERNET_MONITOR={$f5_inet_mon}\n";
+        $c .= "INTERNET_AUTOHEAL={$f5_inet_heal}\n";
+        $c .= "INTERNET_HOST={$f5_inet_host}\n";
+        $c .= "INTERNET_PORT={$f5_inet_port}\n";
+        $c .= "TIME_MONITOR={$f5_time_mon}\n";
+        $c .= "TIME_AUTOHEAL={$f5_time_heal}\n";
+        $c .= "SERVICES_MONITOR={$f5_svc_mon}\n";
+        $c .= "SERVICES_AUTOHEAL={$f5_svc_heal}\n";
+        $c .= "SERVICES_LIST={$f5_svc_list_str}\n\n";
+
         $c .= "[MQTT]\n";
         $c .= "ENABLED={$mqtt_en}\n";
         $c .= "USE_LOXBERRY_MQTT={$use_lb_new}\n";
@@ -115,6 +163,16 @@ $f3_enabled = ($cfg['SCHEDULED_REBOOT']['ENABLED'] ?? '0') == '1';
 $f4_enabled = ($cfg['MQTT_WATCHDOG']['ENABLED'] ?? '0') == '1';
 $f4_mosq_autorestart = ($cfg['MQTT_WATCHDOG']['MOSQUITTO_AUTORESTART'] ?? '1') == '1';
 $f4_gw_autorestart   = ($cfg['MQTT_WATCHDOG']['GATEWAY_AUTORESTART'] ?? '0') == '1';
+$f5_enabled           = ($cfg['SYSTEM_DIAGNOSTICS']['ENABLED'] ?? '0') == '1';
+$f5_disk_monitor      = ($cfg['SYSTEM_DIAGNOSTICS']['DISK_MONITOR'] ?? '1') == '1';
+$f5_memory_monitor    = ($cfg['SYSTEM_DIAGNOSTICS']['MEMORY_MONITOR'] ?? '1') == '1';
+$f5_temp_monitor      = ($cfg['SYSTEM_DIAGNOSTICS']['TEMP_MONITOR'] ?? '1') == '1';
+$f5_internet_monitor  = ($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_MONITOR'] ?? '1') == '1';
+$f5_internet_autoheal = ($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_AUTOHEAL'] ?? '0') == '1';
+$f5_time_monitor      = ($cfg['SYSTEM_DIAGNOSTICS']['TIME_MONITOR'] ?? '1') == '1';
+$f5_time_autoheal     = ($cfg['SYSTEM_DIAGNOSTICS']['TIME_AUTOHEAL'] ?? '0') == '1';
+$f5_services_monitor  = ($cfg['SYSTEM_DIAGNOSTICS']['SERVICES_MONITOR'] ?? '0') == '1';
+$f5_services_autoheal = ($cfg['SYSTEM_DIAGNOSTICS']['SERVICES_AUTOHEAL'] ?? '0') == '1';
 $weekday_names = [1=>'Mo',2=>'Di',3=>'Mi',4=>'Do',5=>'Fr',6=>'Sa',7=>'So'];
 $f3_weekdays_cfg = array_map('trim', explode(',', $cfg['SCHEDULED_REBOOT']['WEEKDAYS'] ?? '7'));
 
@@ -336,6 +394,172 @@ render_header('app_settings');
 </div>
 
 <!-- ================================================================
+     FUNKTION 5 – SYSTEM-DIAGNOSE
+     ================================================================ -->
+<div class="sl-card">
+    <div class="sl-card-head"><span class="sl-card-head-title">🩺 Funktion 5 – System-Diagnose</span></div>
+    <div class="sl-card-body">
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" id="f5_enabled" name="f5_enabled" <?= $f5_enabled ? 'checked' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">System-Diagnose aktivieren</span>
+            </div>
+            <p class="sl-hint">Erkennt typische Vor-Ort-Einsatz-Ursachen (volle SD-Karte, RAM-Druck,
+                CPU-Temperatur, kein Internet, Zeitabweichung, weitere LoxBerry-Kerndienste). Anders als
+                Funktion 4 ist hier jedes Thema einzeln <b>sowohl im Monitoring als auch im Auto-Heal</b>
+                schaltbar – manche Standorte sollen ggf. nur beobachtet werden. Auto-Heal beschränkt sich
+                bewusst auf Dienst-/Netzwerk-Neustarts, kein Dateisystem-Eingriff.</p>
+        </div>
+        <div class="sl-slider-row">
+            <label>Prüfintervall <span class="sl-slider-val" id="sf5ci"><?= cv('SYSTEM_DIAGNOSTICS','CHECK_INTERVAL','120') ?></span> s</label>
+            <input type="range" name="f5_check_interval" min="30" max="600" step="30"
+                   value="<?= cv('SYSTEM_DIAGNOSTICS','CHECK_INTERVAL','120') ?>"
+                   oninput="document.getElementById('sf5ci').textContent=this.value">
+        </div>
+        <hr>
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" class="f5-sub" name="f5_disk_monitor" <?= $f5_disk_monitor ? 'checked' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">💾 Speicherplatz überwachen</span>
+            </div>
+            <div class="sl-slider-row">
+                <label>Warnung ab <span class="sl-slider-val" id="sf5dw"><?= cv('SYSTEM_DIAGNOSTICS','DISK_WARN_PERCENT','85') ?></span> %</label>
+                <input type="range" name="f5_disk_warn" min="50" max="99" step="1"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','DISK_WARN_PERCENT','85') ?>"
+                       oninput="document.getElementById('sf5dw').textContent=this.value">
+            </div>
+            <div class="sl-slider-row">
+                <label>Kritisch ab <span class="sl-slider-val" id="sf5dc"><?= cv('SYSTEM_DIAGNOSTICS','DISK_CRIT_PERCENT','95') ?></span> %</label>
+                <input type="range" name="f5_disk_crit" min="50" max="100" step="1"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','DISK_CRIT_PERCENT','95') ?>"
+                       oninput="document.getElementById('sf5dc').textContent=this.value">
+            </div>
+            <p class="sl-hint">Kein Auto-Heal (ein Neustart macht Speicherplatz nicht frei) – reine Frühwarnung
+                bevor die SD-Karte vollläuft.</p>
+        </div>
+        <hr>
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" class="f5-sub" name="f5_memory_monitor" <?= $f5_memory_monitor ? 'checked' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">🧠 RAM-Auslastung überwachen</span>
+            </div>
+            <div class="sl-slider-row">
+                <label>Warnung ab <span class="sl-slider-val" id="sf5mw"><?= cv('SYSTEM_DIAGNOSTICS','MEMORY_WARN_PERCENT','90') ?></span> %</label>
+                <input type="range" name="f5_memory_warn" min="50" max="100" step="1"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','MEMORY_WARN_PERCENT','90') ?>"
+                       oninput="document.getElementById('sf5mw').textContent=this.value">
+            </div>
+            <p class="sl-hint">Kein Auto-Heal – reine Anzeige.</p>
+        </div>
+        <hr>
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" class="f5-sub" name="f5_temp_monitor" <?= $f5_temp_monitor ? 'checked' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">🌡️ CPU-Temperatur überwachen</span>
+            </div>
+            <div class="sl-slider-row">
+                <label>Warnung ab <span class="sl-slider-val" id="sf5tw"><?= cv('SYSTEM_DIAGNOSTICS','TEMP_WARN_C','70') ?></span> °C</label>
+                <input type="range" name="f5_temp_warn" min="40" max="100" step="1"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','TEMP_WARN_C','70') ?>"
+                       oninput="document.getElementById('sf5tw').textContent=this.value">
+            </div>
+            <div class="sl-slider-row">
+                <label>Kritisch ab <span class="sl-slider-val" id="sf5tc"><?= cv('SYSTEM_DIAGNOSTICS','TEMP_CRIT_C','80') ?></span> °C</label>
+                <input type="range" name="f5_temp_crit" min="40" max="120" step="1"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','TEMP_CRIT_C','80') ?>"
+                       oninput="document.getElementById('sf5tc').textContent=this.value">
+            </div>
+            <p class="sl-hint">Kein Auto-Heal – nur auf Geräten mit lesbarer Temperatursensorik (z.B. Raspberry
+                Pi) verfügbar, sonst "nicht ermittelbar".</p>
+        </div>
+        <hr>
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" class="f5-sub" id="f5_internet_monitor" name="f5_internet_monitor" <?= $f5_internet_monitor ? 'checked' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">🌐 Internet-Erreichbarkeit überwachen</span>
+            </div>
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" id="f5_internet_autoheal" name="f5_internet_autoheal" <?= $f5_internet_autoheal ? 'checked' : '' ?> <?= !$f5_internet_monitor ? 'disabled' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">Netzwerk bei Ausfall automatisch neu starten</span>
+            </div>
+            <div class="sl-field">
+                <label for="f5_internet_host">Prüfziel Host</label>
+                <input type="text" id="f5_internet_host" name="f5_internet_host" value="<?= cv('SYSTEM_DIAGNOSTICS','INTERNET_HOST','1.1.1.1') ?>">
+            </div>
+            <div class="sl-field">
+                <label for="f5_internet_port">Prüfziel Port</label>
+                <input type="number" id="f5_internet_port" name="f5_internet_port" value="<?= cv('SYSTEM_DIAGNOSTICS','INTERNET_PORT','53') ?>">
+            </div>
+            <p class="sl-hint">Getrennt von der Netbird-Prüfung (Funktion 1) – unterscheidet "Kunde hat kein
+                Internet" von "Netbird selbst hat ein Problem". Auto-Heal startet den Netzwerk-Dienst
+                (dhcpcd/networking) neu, kein Interface-Down/Up.</p>
+        </div>
+        <hr>
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" class="f5-sub" id="f5_time_monitor" name="f5_time_monitor" <?= $f5_time_monitor ? 'checked' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">🕒 Zeit-Synchronisation überwachen</span>
+            </div>
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" id="f5_time_autoheal" name="f5_time_autoheal" <?= $f5_time_autoheal ? 'checked' : '' ?> <?= !$f5_time_monitor ? 'disabled' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">Zeit-Sync bei Abweichung automatisch neu starten</span>
+            </div>
+            <p class="sl-hint">Prüft ob systemd die Uhrzeit als NTP-synchronisiert meldet. Relevant u.a. für
+                Funktion 3 (zeitgesteuerter Reboot) und Zertifikate.</p>
+        </div>
+        <hr>
+        <div class="sl-field">
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" class="f5-sub" id="f5_services_monitor" name="f5_services_monitor" <?= $f5_services_monitor ? 'checked' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">🛠️ Weitere Kern-Dienste überwachen</span>
+            </div>
+            <div class="sl-toggle-wrap">
+                <label class="sl-toggle">
+                    <input type="checkbox" id="f5_services_autoheal" name="f5_services_autoheal" <?= $f5_services_autoheal ? 'checked' : '' ?> <?= !$f5_services_monitor ? 'disabled' : '' ?>>
+                    <span class="sl-toggle-slider"></span>
+                </label>
+                <span class="sl-toggle-label">Diese Dienste bei Bedarf automatisch neu starten</span>
+            </div>
+            <div class="sl-field">
+                <label for="f5_services_list">Dienstnamen (systemd, kommagetrennt)</label>
+                <input type="text" id="f5_services_list" name="f5_services_list"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','SERVICES_LIST','') ?>" placeholder="z.B. lighttpd,cron,ssh">
+            </div>
+            <p class="sl-hint">Zusätzlich zu Netbird (Funktion 1) und Mosquitto (Funktion 4) – z.B. weitere
+                LoxBerry-Kerndienste. Nutze <code>systemctl list-units --type=service</code> per SSH um die
+                genauen Namen zu ermitteln. Läuft über denselben validierten Root-Helper wie Funktion 4.</p>
+        </div>
+    </div>
+</div>
+
+<!-- ================================================================
      MQTT BROKER (optionale Statusanzeige)
      ================================================================ -->
 <div class="sl-card collapsed">
@@ -420,6 +644,39 @@ render_header('app_settings');
         });
     }
     f4.addEventListener('change', update);
+})();
+
+// F5 Toggles: Master schaltet alle Sub-Themen, jedes Sub-Thema schaltet nur sein eigenes
+// Auto-Heal (Internet/Zeit/Dienste – Disk/RAM/Temp haben kein Auto-Heal).
+(function() {
+    var f5 = document.getElementById('f5_enabled');
+    var subs = document.querySelectorAll('.f5-sub');
+    var pairs = [
+        ['f5_internet_monitor', 'f5_internet_autoheal'],
+        ['f5_time_monitor',     'f5_time_autoheal'],
+        ['f5_services_monitor', 'f5_services_autoheal'],
+    ];
+    function updateHeal() {
+        pairs.forEach(function(p) {
+            var mon = document.getElementById(p[0]);
+            var heal = document.getElementById(p[1]);
+            if (!mon || !heal) return;
+            heal.disabled = !mon.checked || (f5 && !f5.checked);
+            if (heal.disabled) heal.checked = false;
+        });
+    }
+    function updateMaster() {
+        subs.forEach(function(el) {
+            el.disabled = f5 && !f5.checked;
+            if (el.disabled) el.checked = false;
+        });
+        updateHeal();
+    }
+    if (f5) f5.addEventListener('change', updateMaster);
+    pairs.forEach(function(p) {
+        var mon = document.getElementById(p[0]);
+        if (mon) mon.addEventListener('change', updateHeal);
+    });
 })();
 
 // MQTT Toggle: manuelle Felder ein-/ausblenden

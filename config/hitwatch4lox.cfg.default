@@ -43,6 +43,38 @@ GATEWAY_AUTORESTART=0
 GATEWAY_PROCESS_PATTERN=mqttgateway.pl
 GATEWAY_MQTT_PREFIX=loxberry/mqttgateway
 
+[SYSTEM_DIAGNOSTICS]
+# Funktion 5: System-Diagnose – überwacht typische Vor-Ort-Einsatz-Ursachen (volle SD-Karte,
+# RAM-Druck, CPU-Temperatur, kein Internet, Zeitabweichung, weitere LoxBerry-Kerndienste).
+# Anders als Funktion 4 ist hier JEDES Thema einzeln SOWOHL im Monitoring ALS AUCH im
+# Auto-Heal schaltbar – manche Standorte sollen ggf. nur beobachtet werden. Auto-Heal
+# beschränkt sich bewusst auf Dienst-/Netzwerk-Neustarts, kein Dateisystem-Remount o.ä.
+ENABLED=0
+CHECK_INTERVAL=120
+
+DISK_MONITOR=1
+DISK_WARN_PERCENT=85
+DISK_CRIT_PERCENT=95
+
+MEMORY_MONITOR=1
+MEMORY_WARN_PERCENT=90
+
+TEMP_MONITOR=1
+TEMP_WARN_C=70
+TEMP_CRIT_C=80
+
+INTERNET_MONITOR=1
+INTERNET_AUTOHEAL=0
+INTERNET_HOST=1.1.1.1
+INTERNET_PORT=53
+
+TIME_MONITOR=1
+TIME_AUTOHEAL=0
+
+SERVICES_MONITOR=0
+SERVICES_AUTOHEAL=0
+SERVICES_LIST=
+
 [MQTT]
 # Optionale Statusveröffentlichung an Loxone (Verbindungsstatus, letzte Aktionen).
 # Rein informativ – die Watchdog-Logik selbst ist von MQTT vollständig unabhängig.

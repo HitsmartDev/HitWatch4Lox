@@ -1,9 +1,10 @@
 ## 📌 Projekt-Status
-- **Version:** 1.0 (2026-09-18: UI-Umbau + eigenes Prüfintervall für Funktion 4. Daemon-Steuerung
-  jetzt ganz oben auf der Statusseite; MQTT-Dienste-Status zeigt jetzt einen "Letzte Prüfung"-
-  Zeitstempel; Funktion 4 hängt nicht mehr am `CHECK_INTERVAL` von Funktion 1, sondern läuft über
-  eine neue `LOOP_TICK`-Hauptschleifen-Architektur mit eigenem, in den Settings einstellbarem
-  Intervall – Standard 60s statt vorher indirekt 300s.)
+- **Version:** 1.1 (2026-09-20: Neue Funktion 5 "System-Diagnose" – Speicher/RAM/CPU-Temperatur/
+  Internet/Zeit-Sync/weitere Kerndienste, jedes Thema einzeln im Monitoring UND Auto-Heal
+  schaltbar. Dazu ein neues MQTT-Ampel-Topic (`health`/`health_detail`, fasst F1/F4/F5 zu einem
+  Gesamtstatus zusammen) und ein sofortiges Event-Topic (`event`, nicht retained) bei jedem
+  Neustart/Reboot statt erst beim nächsten Zyklus – auf Nutzerwunsch, um HitWatch4Lox als
+  zentrale "Ist alles grün?"-Quelle für Loxone bei vielen Kundenstandorten nutzbar zu machen.)
 - **Aktueller Fokus:** Grundgerüst von HitWatch4Lox (ursprünglich reiner Netbird-Watchdog, jetzt
   auch MQTT-Dienste) vollständig gebaut, als Framework von Unwetter4Lox übernommen (gleiche
   LoxBerry-Plugin-Konventionen: PHP-Webfrontend im iframe-isolierten `sl-`-Komponenten-Stil,
@@ -108,7 +109,44 @@
      Funktion 1 in diesem Tick gar nicht lief – ein erkannter Fehlerstatus wäre so sofort wieder
      verschwunden, bevor die nächste echte Prüfung stattfindet. Reset jetzt nur noch innerhalb
      des F1-gegateten Blocks.
+- **v1.1 – Funktion 5 "System-Diagnose" + MQTT-Ampel/Event (auf Nutzerwunsch):** Stefan fragte
+  nach weiteren Themen, die HitWatch4Lox als "Backup-Akteur" an vielen Kunden-LoxBerries prüfen/
+  reparieren könnte, plus einer zentralen MQTT-Ampel für Loxone und einer Sofort-Benachrichtigung
+  bei jedem Neustart. Umsetzung:
+  1. **Funktion 5 (`[SYSTEM_DIAGNOSTICS]`):** sechs Themen – Speicherplatz (Root-Partition-%,
+     `shutil.disk_usage`), RAM-Auslastung (`/proc/meminfo`, `MemAvailable`-basiert), CPU-Temperatur
+     (`/sys/class/thermal/thermal_zone0/temp`, Fallback `vcgencmd`), Internet-Erreichbarkeit
+     (TCP-Check, Standard 1.1.1.1:53, bewusst GETRENNT von Funktion 1s Netbird-Check), Zeit-
+     Synchronisation (`timedatectl show --property=NTPSynchronized,SystemClockSynchronized` –
+     nutzt systemds eigene Bewertung statt einer selbstgebauten NTP-Abfrage) und eine frei
+     konfigurierbare Liste weiterer Kerndienste (wiederverwendet den bestehenden generischen
+     `restart_service`-Mechanismus aus Funktion 4/Mosquitto 1:1).
+  2. **Bewusst andere Toggle-Philosophie als Funktion 4:** Nutzerwunsch war hier explizit dass
+     sowohl Monitoring ALS AUCH Auto-Heal pro Thema einzeln schaltbar sind (nicht wie bei F4, wo
+     Monitoring immer läuft). Internet/Zeit/Dienste haben je ein eigenes `_MONITOR`- und
+     `_AUTOHEAL`-Flag; Speicher/RAM/Temperatur haben bewusst KEIN Auto-Heal-Flag – ein Neustart
+     löst diese drei Probleme nicht, würde nur unnötiges Risiko ohne Nutzen bedeuten.
+  3. **Root-Helper um zwei feste (argumentlose) Unterbefehle erweitert:** `restart_networking`
+     (versucht `dhcpcd`, dann `networking`) und `sync_time` (`timedatectl set-ntp true` +
+     `systemd-timesyncd` restart, Fallback `ntpdate`) – beide OHNE Nutzerargument, daher einfache
+     feste sudoers-Zeilen wie `check`/`restart`/`reboot`, keine neue Validierungs-Angriffsfläche.
+  4. **Health-Ampel (`compute_health()`):** aggregiert F1 (Netbird verbunden?), F4 (Mosquitto/
+     Gateway gesund?) und F5 (alle aktiven Sub-Checks) zu `state['health']`
+     (`green`/`yellow`/`red`) + `state['health_detail']` (Klartext-Problemliste). Läuft JEDEN
+     Loop-Tick (billig, liest nur bereits berechneten State) direkt vor `save_state()`/
+     `mqtt_publish_status()` – die Ampel ist damit nie älter als die letzte Persistenz. Auf der
+     Statusseite als Banner ganz oben sichtbar (`hw4l_health_badge()` in `common.php`).
+  5. **MQTT-Event-Topic (`event`, NICHT retained):** `log_action()` ruft jetzt zusätzlich
+     `mqtt_publish_event(entry)` auf – eine eigene Kurzverbindung SOFORT bei jeder signifikanten
+     Aktion (Dienst-Neustart, Reboot), unabhängig vom nächsten regulären
+     `mqtt_publish_status()`-Zyklus (der bis zu `LOOP_TICK` Sekunden später käme). JSON-Payload
+     `{action, label, success, detail, time, epoch}`, Label-Mapping über das neue
+     `ACTION_LABELS`-Dict in Python (inhaltlich deckungsgleich mit `hw4l_action_label()` in
+     `common.php`, aber separat gepflegt – Python kann PHP-Funktionen nicht aufrufen).
 - **Noch offen:**
+  - [ ] Funktion 5 (alle sechs Sub-Checks + Auto-Heal-Aktionen), die Health-Ampel und das
+    Event-Topic sind mangels Linux-Testumgebung im Rahmen dieser Session nur isoliert
+    (Funktionsebene, simulierter State) getestet, NICHT auf einem echten LoxBerry verifiziert.
   - [ ] **Mit v0.9 erstmals wirklich testbar:** v0.6 (falscher Erkennungsweg) → v0.7 (Fehler
     unsichtbar) → v0.8 (falsche Auth-Keys) → v0.9 (Timeout-Bug) verhinderten jeweils einen echten
     Funktionstest von "Verbindung zu Mosquitto". Exakten `loxberry/mqttgateway`-Topic-Pfad daher
@@ -156,7 +194,49 @@
      Beginn jedes Durchlaufs. Neustart nur wenn die jeweilige `..._AUTORESTART`-Config an ist
      (kein Cooldown, kein Reboot, nur Dienst-/Prozess-Neustart; Gateway-Neustart via
      `restart_process()`/`pkill`, unprivilegiert)
-  5. `log_action()` bei jedem Neustart/Reboot → `save_state()` + `mqtt_publish_status()` (unkritisch bei Fehlschlag)
+  5. Funktion 5 (eigenes `CHECK_INTERVAL`, Standard 120s, seit v1.1): sechs einzeln schaltbare
+     Themen (Speicher, RAM, CPU-Temp, Internet, Zeit-Sync, weitere Kerndienste) – siehe
+     Abschnitt "Funktion 5" unten. Anders als F1-F4 ist hier auch das Monitoring pro Thema
+     einzeln abschaltbar, nicht nur das Auto-Heal.
+  6. Health-Ampel (`compute_health()`, seit v1.1): läuft JEDEN Tick, fasst F1/F4/F5 zu
+     `state['health']`/`state['health_detail']` zusammen – vor der Persistenz, siehe unten.
+  7. `log_action()` bei jedem Neustart/Reboot → schreibt `action_log` UND veröffentlicht seit
+     v1.1 sofort ein MQTT-Event (`mqtt_publish_event()`, siehe unten) → danach
+     `save_state()` + `mqtt_publish_status()` (Heartbeat-Zyklus, unkritisch bei Fehlschlag)
+
+### Funktion 5: System-Diagnose (`bin/hitwatch4lox_daemon.py`, seit v1.1)
+- Sechs Themen, JEDES mit eigenem Monitoring-Flag (`F5_*_MONITOR`) und – wo ein Neustart
+  überhaupt sinnvoll helfen kann – einem eigenen Auto-Heal-Flag (`F5_*_AUTOHEAL`):
+  - **Speicher** (`check_disk_usage()`, `shutil.disk_usage('/')`) – kein Auto-Heal
+  - **RAM** (`check_memory_usage()`, `/proc/meminfo` `MemAvailable`) – kein Auto-Heal
+  - **CPU-Temperatur** (`check_cpu_temperature()`, `/sys/class/thermal/thermal_zone0/temp`,
+    Fallback `vcgencmd measure_temp`) – kein Auto-Heal
+  - **Internet** (`tcp_check()` gegen konfigurierbares Ziel, Standard 1.1.1.1:53 – bewusst
+    getrennt von Funktion 1s Netbird-Check) – Auto-Heal via `restart_networking()`
+    (Root-Helper `restart_networking`: `dhcpcd` oder `networking` neu starten)
+  - **Zeit-Sync** (`check_time_sync()`, `timedatectl show --property=NTPSynchronized,
+    SystemClockSynchronized` – nutzt systemds eigene Bewertung statt eigener NTP-Logik) –
+    Auto-Heal via `sync_time_now()` (Root-Helper `sync_time`: `timedatectl set-ntp true` +
+    `systemd-timesyncd` restart, Fallback `ntpdate`)
+  - **Weitere Kerndienste** (`SERVICES_LIST`, kommagetrennt, z.B. `lighttpd,cron,ssh`) –
+    wiederverwendet 1:1 `get_service_state()`/`restart_service()` aus Funktion 4
+- Speicher/RAM/Temperatur haben bewusst KEIN Auto-Heal: ein Neustart behebt diese Probleme
+  nicht, würde nur Risiko ohne Nutzen bedeuten. Kein Auto-Remount eines schreibgeschützten
+  Root-Dateisystems (klassisches SD-Karten-Sterbesymptom) – das kaschiert oft nur eine
+  sterbende Karte, bewusst NICHT automatisiert.
+- State pro Dienst in `diag_services` (Dict, Key = Dienstname) – persistiert `restart_count`
+  über Zyklen hinweg, analog zu Mosquitto/Gateway in Funktion 4.
+
+### MQTT-Ampel + Sofort-Event (seit v1.1)
+- `compute_health(state)`: aggregiert F1 (`netbird_connected`), F4 (`mosquitto_healthy`,
+  `gateway_healthy`) und F5 (alle aktiven Sub-Checks) zu `('red'|'yellow'|'green', [Probleme])`.
+  Rot bei mindestens einem kritischen Problem, gelb bei nur Warnungen, sonst grün. Läuft JEDEN
+  Loop-Tick (billig) direkt vor `save_state()`/`mqtt_publish_status()`.
+- `mqtt_publish_event(entry)`: eigene Kurzverbindung, published SOFORT bei jedem `log_action()`-
+  Aufruf (nicht retained, JSON `{action, label, success, detail, time, epoch}`) – unabhängig vom
+  nächsten regulären `mqtt_publish_status()`-Zyklus, der bis zu `LOOP_TICK` Sekunden später käme.
+  `ACTION_LABELS`-Dict in Python für die Klartext-Labels (inhaltlich deckungsgleich mit, aber
+  separat von `hw4l_action_label()` in `common.php` – Python kann PHP-Funktionen nicht aufrufen).
 - Root-Aktionen laufen über `run_helper(action, args=None)` → `sudo netbird_watchdog_helper.sh {check|restart|reboot|restart_service <name>}`
   – NUR für Netbird + Mosquitto. Das MQTT-Gateway braucht kein Root (pgrep/pkill/MQTT-Read
   funktionieren unprivilegiert, da Gateway und Daemon beide als `loxberry`-User laufen).
@@ -175,6 +255,10 @@
   `subprocess.run`).
 - `link_check` (v0.5) wieder entfernt in v0.6 – ersetzt durch die MQTT-Status-Topics des Gateways
   selbst, kein Root mehr nötig für den Verbindungscheck.
+- `restart_networking` / `sync_time` (Funktion 5 Auto-Heal, seit v1.1): zwei feste, ARGUMENTLOSE
+  Unterbefehle – keine neue Validierungs-Angriffsfläche wie bei `restart_service`, da kein
+  Nutzer-Input entgegengenommen wird. Bewusst auf Dienst-Neustarts beschränkt (kein Interface-
+  Down/Up, kein Dateisystem-Remount).
 
 ### state.json Struktur (DATADIR)
 - `last_check_epoch`, `last_check`, `netbird_connected`, `netbird_management`, `netbird_signal`
@@ -192,6 +276,15 @@
   `gateway_restart_count` (Funktion 4)
 - `mqtt_watchdog_last_check_epoch`, `mqtt_watchdog_last_check` (seit v1.0, zu Beginn jedes
   F4-Durchlaufs geschrieben, unabhängig von F1s `last_check`)
+- `health`, `health_detail` (seit v1.1, `compute_health()`-Ergebnis, jeden Tick aktualisiert)
+- `diag_last_check_epoch`, `diag_last_check` (Funktion 5, seit v1.1)
+- `diag_disk_percent`, `diag_disk_level` (`ok`/`warn`/`crit`/`unknown`)
+- `diag_memory_percent`, `diag_memory_level`
+- `diag_temp_available` (bool), `diag_temp_c`, `diag_temp_level`
+- `diag_internet_ok`, `diag_internet_restart_count`, `diag_internet_last_restart(_epoch)`
+- `diag_time_synced`, `diag_time_restart_count`, `diag_time_last_restart(_epoch)`
+- `diag_services` (Dict, Key = Dienstname, Value = `{active_state, sub_state, healthy,
+  restart_count, last_restart, last_restart_epoch}` – persistiert Zähler über Zyklen hinweg)
 - `action_log` (Liste, max. 200 Einträge, neueste am Ende – `{epoch, time, action, success,
   detail}`; `action` ∈ `netbird_restart`/`mosquitto_restart`/`gateway_restart`/`netbird_watchdog`/
   `scheduled_reboot`; PHP zeigt sie umgekehrt/neueste zuerst via `array_reverse()`)
@@ -221,10 +314,15 @@ das ist beabsichtigtes LoxBerry-Verhalten, kein Bug, aber relevant beim Testen (
 
 ### MQTT (optional, unkritisch)
 - Präfix Standard: `HitWatch/netbird_watchdog/` (konfigurierbar über `[MQTT] TOPIC_PREFIX`)
+- **Seit v1.1:** `health`/`health_detail` (Ampel, immer veröffentlicht) und `event` (NICHT
+  retained, sofort bei jeder Aktion statt erst beim nächsten Zyklus, JSON-Payload) – siehe
+  Abschnitt "MQTT-Ampel + Sofort-Event" oben.
 - Topics: `status`, `connected`, `management`, `signal`, `last_check_epoch`, `last_restart_epoch`,
   `restart_count_total`, `last_reboot_epoch`, `last_reboot_reason`, `cooldown_active`,
   `cooldown_remaining_min`, plus (wenn F4 aktiv) `mosquitto/*` und `gateway/*` (`healthy`,
-  `active_state`, `sub_state`, `restart_count`, zusätzlich `gateway/broker_linked`)
+  `active_state`, `sub_state`, `restart_count`, zusätzlich `gateway/broker_linked`), plus
+  (wenn F5 aktiv, seit v1.1) `diag/disk_percent`, `diag/memory_percent`, `diag/temp_c`,
+  `diag/internet_ok`, `diag/time_synced` (jeweils nur wenn das zugehörige Monitoring an ist)
 - Vollständige Referenz: `webfrontend/htmlauth/app_help.php`
 
 ---
@@ -239,8 +337,8 @@ nötig (kein Standort erforderlich) – `ajax.php` daher deutlich schlanker als 
 
 | Datei | Zweck |
 |---|---|
-| `app_status.php` | Netbird-Status, Watchdog-Aktionen, **Letzte Aktionen** (neu, letzte 8 aus `action_log`), Cooldown-Anzeige, MQTT-Dienste-Status (Funktion 4, mit Gateway↔Broker-Link), Funktionen-Übersicht, Daemon-Controls |
-| `app_settings.php` | F1/F2/F3/F4-Toggles + Parameter, F2-Toggle per JS gesperrt wenn F1 aus, F4-Autorestart-Toggles (nicht mehr "Überwachung") gesperrt wenn F4 aus, F3 Wochentags-Chips (Mehrfachauswahl) + Frequenz-Select, MQTT-Karte |
+| `app_status.php` | Health-Ampel-Banner (seit v1.1, ganz oben), Daemon-Controls, Netbird-Status, Watchdog-Aktionen, **Letzte Aktionen** (letzte 8 aus `action_log`), Cooldown-Anzeige, MQTT-Dienste-Status (Funktion 4, mit Gateway↔Broker-Link), **System-Diagnose** (Funktion 5, seit v1.1), Funktionen-Übersicht |
+| `app_settings.php` | F1/F2/F3/F4/F5-Toggles + Parameter, F2-Toggle per JS gesperrt wenn F1 aus, F4-Autorestart-Toggles gesperrt wenn F4 aus, F5: jedes Thema mit eigenem Monitoring-Toggle + (wo sinnvoll) eigenem Auto-Heal-Toggle, F3 Wochentags-Chips (Mehrfachauswahl) + Frequenz-Select, MQTT-Karte |
 | `app_log.php` | **Aktions-Historie** (neu, volle `action_log`-Tabelle bis 200 Einträge) oberhalb der bisherigen Log-Session-Liste |
 | `app_help.php` | Die vier Funktionen, Aktions-Historie-Erklärung, Cooldown-/Fangfenster-Erklärung, Sicherheits-/sudoers-Hinweis (inkl. `restart_service`-Ausnahme), MQTT-Referenz, FAQ |
 
@@ -253,6 +351,11 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.1 (2026-09-20):** Neue Funktion 5 "System-Diagnose" (Speicher/RAM/CPU-Temperatur/Internet/
+  Zeit-Sync/weitere Kerndienste, Monitoring UND Auto-Heal je einzeln schaltbar). Neues
+  MQTT-Ampel-Topic (`health`/`health_detail`, fasst F1/F4/F5 zusammen) + Statusseiten-Banner.
+  Neues Sofort-Event-Topic (`event`, nicht retained) bei jedem Neustart/Reboot statt erst beim
+  nächsten Zyklus. Root-Helper um `restart_networking`/`sync_time` erweitert.
 - **v1.0 (2026-09-18):** Daemon-Steuerung-Karte auf `app_status.php` nach oben verschoben;
   "Letzte Prüfung"-Anzeige für Funktion 4 (Zeitstempel + Staleness); Funktion 4 läuft jetzt mit
   eigenem, unabhängigem Prüfintervall (`MQTT_WATCHDOG.CHECK_INTERVAL`, Default 60s) statt am

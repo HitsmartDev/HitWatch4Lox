@@ -30,7 +30,7 @@ automatisiert.</p>
      DIE VIER FUNKTIONEN
      ================================================================ -->
 <details class="sl-details" open>
-<summary>⚙️ Die vier Funktionen im Detail</summary>
+<summary>⚙️ Die fünf Funktionen im Detail</summary>
 <div class="sl-details-body">
 
 <details class="sl-details-nested" open>
@@ -126,6 +126,43 @@ der Gateway-<b>Prozess</b> läuft, wird davon unabhängig zuverlässig per <code
 </div>
 </details>
 
+<details class="sl-details-nested">
+<summary>Funktion 5 – System-Diagnose (Auto-Heal)</summary>
+<div class="sl-details-body">
+<p>Erkennt typische Ursachen für einen Vor-Ort-Einsatz bei Kunden, bevor sie zum Totalausfall
+werden. Anders als Funktion 4 ist hier <b>jedes Thema einzeln sowohl im Monitoring als auch im
+Auto-Heal</b> schaltbar – manche Standorte sollen vielleicht nur beobachtet, nicht automatisch
+verändert werden. Eigenes Prüfintervall (Standard 120 s).</p>
+<ul>
+<li><b>💾 Speicherplatz:</b> Füllstand der Root-Partition in %. Warnung/kritisch-Schwellen einzeln
+einstellbar. <b>Kein Auto-Heal</b> – ein Neustart macht keinen Speicherplatz frei, das ist reine
+Frühwarnung bevor die SD-Karte vollläuft.</li>
+<li><b>🧠 RAM-Auslastung:</b> % belegter Arbeitsspeicher (inkl. Cache-Bereinigung über
+<code>MemAvailable</code>). Kein Auto-Heal.</li>
+<li><b>🌡️ CPU-Temperatur:</b> liest die generische <code>thermal_zone0</code>-Schnittstelle (Fallback
+<code>vcgencmd</code> auf Raspberry Pi). Auf Geräten ohne lesbaren Sensor erscheint "nicht
+ermittelbar". Kein Auto-Heal.</li>
+<li><b>🌐 Internet-Erreichbarkeit:</b> TCP-Verbindungstest gegen ein konfigurierbares Ziel (Standard
+1.1.1.1:53) – bewusst <b>getrennt</b> von der Netbird-Prüfung (Funktion 1), damit man
+unterscheiden kann ob beim Kunden das Internet weg ist oder nur Netbird selbst ein Problem hat.
+<b>Auto-Heal (optional):</b> startet den Netzwerk-Dienst (<code>dhcpcd</code> bzw.
+<code>networking</code>) neu – kein Interface-Down/Up-Gebastel.</li>
+<li><b>🕒 Zeit-Synchronisation:</b> fragt <code>timedatectl</code> ob die Systemzeit aktuell
+NTP-synchronisiert ist (keine eigene NTP-Abfrage nötig, nutzt systemds eigene Bewertung).
+Relevant u.a. für Funktion 3 (zeitgesteuerter Reboot) und TLS-Zertifikate. <b>Auto-Heal
+(optional):</b> startet <code>systemd-timesyncd</code> neu (Fallback <code>ntpdate</code>).</li>
+<li><b>🛠️ Weitere Kern-Dienste:</b> eine frei konfigurierbare, kommagetrennte Liste zusätzlicher
+systemd-Dienste (z.B. <code>lighttpd</code>, <code>cron</code>, <code>ssh</code>) – Status wie bei
+Mosquitto in Funktion 4. <b>Auto-Heal (optional):</b> <code>systemctl restart</code> über denselben
+validierten Root-Helper.</li>
+</ul>
+<p class="sl-hint">Bewusste Grenze: Auto-Heal beschränkt sich überall auf Dienst-/Netzwerk-Neustarts.
+Ein automatisches Remounten eines schreibgeschützten Root-Dateisystems (klassisches
+SD-Karten-Sterbesymptom) ist <b>nicht</b> automatisiert – das kaschiert oft nur eine sterbende
+Karte und würde das eigentliche Problem eher verschleiern als lösen.</p>
+</div>
+</details>
+
 </div>
 </details>
 
@@ -173,18 +210,19 @@ einen Neustart des Daemons selbst.</p>
 <p>Der Daemon läuft – wie alle HitSmart LoxBerry-Plugins – als unprivilegierter
 <code>loxberry</code>-User. Root-pflichtige Aktionen (Netbird-Status, Dienst-Neustarts, Reboot)
 laufen ausschließlich über ein separates Root-Helper-Skript (<code>netbird_watchdog_helper.sh</code>).</p>
-<p>Für die Unterbefehle <code>check</code>, <code>restart</code> und <code>reboot</code> (Netbird,
-Funktion 1/2/3) gibt die <code>sudoers</code>-Regel (unter <code>/etc/sudoers.d/hitwatch4lox</code>,
+<p>Für die Unterbefehle <code>check</code>, <code>restart</code>, <code>reboot</code> (Netbird,
+Funktion 1/2/3) sowie <code>restart_networking</code> und <code>sync_time</code> (Funktion 5
+Auto-Heal) gibt die <code>sudoers</code>-Regel (unter <code>/etc/sudoers.d/hitwatch4lox</code>,
 von <code>postroot.sh</code> angelegt) <b>ausschließlich</b> diese exakten, argumentlosen Aufrufe
 frei – kein <code>ALL</code>, keine Wildcards.</p>
-<p><b>Einzige Ausnahme:</b> <code>restart_service &lt;name&gt;</code> (Funktion 4, Mosquitto)
-nimmt einen vom Nutzer in den Einstellungen konfigurierten Dienstnamen entgegen, da dieser je
-nach LoxBerry-Setup unterschiedlich ist. Sowohl der Python-Daemon als auch das Helper-Skript
-selbst validieren den Namen streng (nur Buchstaben, Ziffern sowie <code>._@-</code>, max. 64
-Zeichen) bevor er an <code>systemctl restart</code> übergeben wird – kein Shell-Passthrough,
-keine Sonderzeichen. Die <code>sudoers</code>-Zeile dafür lautet <code>restart_service *</code>,
-ist damit aber weiterhin auf genau diesen einen validierten Befehl beschränkt, nicht auf
-beliebige sudo-Kommandos.</p>
+<p><b>Einzige Ausnahme:</b> <code>restart_service &lt;name&gt;</code> (Funktion 4 Mosquitto,
+Funktion 5 weitere Kerndienste) nimmt einen vom Nutzer in den Einstellungen konfigurierten
+Dienstnamen entgegen, da dieser je nach LoxBerry-Setup unterschiedlich ist. Sowohl der
+Python-Daemon als auch das Helper-Skript selbst validieren den Namen streng (nur Buchstaben,
+Ziffern sowie <code>._@-</code>, max. 64 Zeichen) bevor er an <code>systemctl restart</code>
+übergeben wird – kein Shell-Passthrough, keine Sonderzeichen. Die <code>sudoers</code>-Zeile
+dafür lautet <code>restart_service *</code>, ist damit aber weiterhin auf genau diesen einen
+validierten Befehl beschränkt, nicht auf beliebige sudo-Kommandos.</p>
 <p>Das MQTT-Gateway läuft <b>nicht</b> über diesen Root-Helper: Da es unter demselben User wie
 der Daemon (<code>loxberry</code>) läuft, genügen unprivilegierte <code>pgrep</code>/<code>pkill</code>
 – kein sudo, kein zusätzlicher sudoers-Eintrag nötig.</p>
@@ -197,11 +235,22 @@ der Daemon (<code>loxberry</code>) läuft, genügen unprivilegierte <code>pgrep<
 <details class="sl-details">
 <summary>📡 MQTT Topics (optionale Statusanzeige)</summary>
 <div class="sl-details-body">
-<p>Standard-Präfix: <code>HitWatch/netbird_watchdog/</code> (konfigurierbar). Alle Topics mit
-<b>retain=true</b>. Rein informativ – bei MQTT-Ausfall läuft die Watchdog-Logik unverändert
-weiter, da jede Veröffentlichung als kurzlebige Verbindung (connect → publish → disconnect)
-pro Prüfzyklus erfolgt, nicht als Dauerverbindung.</p>
+<p>Standard-Präfix: <code>HitWatch/netbird_watchdog/</code> (konfigurierbar). Rein informativ –
+bei MQTT-Ausfall läuft die Watchdog-Logik unverändert weiter, da jede Veröffentlichung als
+kurzlebige Verbindung (connect → publish → disconnect) erfolgt, nicht als Dauerverbindung.</p>
+<p><b>🚦 Ampel (<code>health</code>/<code>health_detail</code>):</b> fasst Funktion 1/4/5 zu einem
+einzigen Gesamtstatus zusammen – für eine Ein-Blick-Übersicht über viele Standorte in Loxone,
+ohne dass man jedes Einzel-Topic selbst auswerten muss.</p>
+<p><b>⚡ Event (<code>event</code>, NICHT retained):</b> wird <b>sofort</b> bei jedem Dienst-/
+Prozess-Neustart oder Reboot veröffentlicht (nicht erst beim nächsten Prüfzyklus) – JSON-Payload
+mit Aktion, Klartext-Label, Erfolg, Detail und Zeitpunkt. Für eine Loxone-Benachrichtigung "es
+wurde gerade etwas neugestartet" in Echtzeit, z.B. per Loxone-MQTT-Virtual-Input auf dieses Topic
++ eine Formel/einen Baustein der bei jeder Nachricht (nicht nur bei Wertänderung) einen Alarm
+auslöst.</p>
 <table class="sl-mqtt-tbl"><thead><tr><th>Topic</th><th>Werte</th><th>Bedeutung</th></tr></thead><tbody>
+<tr><td><code>health</code></td><td>green/yellow/red</td><td>Gesamtstatus – rot bei kritischen Problemen (z.B. Netbird/Mosquitto/Gateway down, kein Internet), gelb bei Warnungen (z.B. Speicher knapp), grün sonst</td></tr>
+<tr><td><code>health_detail</code></td><td>Text</td><td>Klartext-Liste der aktuellen Probleme, "Alles OK" wenn keine</td></tr>
+<tr><td><code>event</code></td><td>JSON, <b>nicht</b> retained</td><td>Sofort bei jeder Aktion: <code>{action, label, success, detail, time, epoch}</code></td></tr>
 <tr><td><code>status</code></td><td>Text</td><td>"OK" oder Fehlertext</td></tr>
 <tr><td><code>connected</code></td><td>0 / 1</td><td>Netbird aktuell verbunden</td></tr>
 <tr><td><code>management</code></td><td>Text</td><td>Management-Verbindungsstatus aus <code>netbird status --detail</code></td></tr>
@@ -222,6 +271,11 @@ pro Prüfzyklus erfolgt, nicht als Dauerverbindung.</p>
 <tr><td><code>gateway/sub_state</code></td><td>Text</td><td>"running"/"dead" – synthetisch aus <code>pgrep</code></td></tr>
 <tr><td><code>gateway/restart_count</code></td><td>Zahl</td><td>Gateway-Neustarts (Prozess beendet, LoxBerry respawnt) seit Daemon-Start</td></tr>
 <tr><td><code>gateway/broker_linked</code></td><td>0 / 1</td><td>Gateway meldet selbst "Connected" zu Mosquitto (aus dessen eigenem MQTT-Status-Topic)</td></tr>
+<tr><td><code>diag/disk_percent</code></td><td>%</td><td>Nur wenn Funktion 5 + Speicher-Monitoring aktiv</td></tr>
+<tr><td><code>diag/memory_percent</code></td><td>%</td><td>Nur wenn Funktion 5 + RAM-Monitoring aktiv</td></tr>
+<tr><td><code>diag/temp_c</code></td><td>°C</td><td>Nur wenn Funktion 5 + Temperatur-Monitoring aktiv UND Sensor lesbar</td></tr>
+<tr><td><code>diag/internet_ok</code></td><td>0 / 1</td><td>Nur wenn Funktion 5 + Internet-Monitoring aktiv</td></tr>
+<tr><td><code>diag/time_synced</code></td><td>0 / 1</td><td>Nur wenn Funktion 5 + Zeit-Monitoring aktiv</td></tr>
 </tbody></table>
 </div>
 </details>

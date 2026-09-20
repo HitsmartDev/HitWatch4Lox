@@ -1,6 +1,6 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.0'
-import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, traceback
+DAEMON_VERSION = '1.1'
+import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
 
@@ -179,6 +179,37 @@ if F4_ENABLED and (len(F4_GATEWAY_PATTERN) < 4 or len(F4_GATEWAY_PATTERN) > 128)
     log.warning(f'MQTT_WATCHDOG.GATEWAY_PROCESS_PATTERN ungültig/zu kurz ({F4_GATEWAY_PATTERN!r}) – Fallback "mqttgateway.pl"')
     F4_GATEWAY_PATTERN = 'mqttgateway.pl'
 
+# Funktion 5: System-Diagnose. Anders als Funktion 4 ist hier JEDES Thema einzeln sowohl im
+# Monitoring ALS AUCH im Auto-Heal schaltbar (Nutzerwunsch: manche Standorte sollen nur
+# beobachtet, nicht automatisch verändert werden). Auto-Heal beschränkt sich bewusst auf
+# Dienst-/Netzwerk-Neustarts – kein Dateisystem-Remount o.ä. (zu riskant unbeaufsichtigt).
+F5_ENABLED         = get_cfg('SYSTEM_DIAGNOSTICS', 'ENABLED', '0') == '1'
+F5_CHECK_INTERVAL  = max(30, min(3600, int(get_cfg('SYSTEM_DIAGNOSTICS', 'CHECK_INTERVAL', '120'))))
+
+F5_DISK_MONITOR    = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'DISK_MONITOR', '1') == '1'
+F5_DISK_WARN_PCT   = max(1, min(99, int(get_cfg('SYSTEM_DIAGNOSTICS', 'DISK_WARN_PERCENT', '85'))))
+F5_DISK_CRIT_PCT   = max(F5_DISK_WARN_PCT, min(100, int(get_cfg('SYSTEM_DIAGNOSTICS', 'DISK_CRIT_PERCENT', '95'))))
+
+F5_MEMORY_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'MEMORY_MONITOR', '1') == '1'
+F5_MEMORY_WARN_PCT = max(1, min(100, int(get_cfg('SYSTEM_DIAGNOSTICS', 'MEMORY_WARN_PERCENT', '90'))))
+
+F5_TEMP_MONITOR    = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'TEMP_MONITOR', '1') == '1'
+F5_TEMP_WARN_C     = max(1, min(120, int(get_cfg('SYSTEM_DIAGNOSTICS', 'TEMP_WARN_C', '70'))))
+F5_TEMP_CRIT_C     = max(F5_TEMP_WARN_C, min(120, int(get_cfg('SYSTEM_DIAGNOSTICS', 'TEMP_CRIT_C', '80'))))
+
+F5_INTERNET_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_MONITOR', '1') == '1'
+F5_INTERNET_AUTOHEAL = F5_INTERNET_MONITOR and get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_AUTOHEAL', '0') == '1'
+F5_INTERNET_HOST     = get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_HOST', '1.1.1.1').strip() or '1.1.1.1'
+F5_INTERNET_PORT     = int(get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_PORT', '53') or '53')
+
+F5_TIME_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_MONITOR', '1') == '1'
+F5_TIME_AUTOHEAL = F5_TIME_MONITOR and get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_AUTOHEAL', '0') == '1'
+
+F5_SERVICES_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_MONITOR', '0') == '1'
+F5_SERVICES_AUTOHEAL = F5_SERVICES_MONITOR and get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_AUTOHEAL', '0') == '1'
+_F5_SERVICES_RAW = get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_LIST', '')
+F5_SERVICES_LIST = [s.strip() for s in _F5_SERVICES_RAW.split(',') if s.strip() and _valid_service_name(s.strip())]
+
 # Die Hauptschleife tickt im kürzesten aktiven Intervall (üblicherweise F4, 60s statt F1s 300s),
 # damit ein Dienst mit kurzem Prüfintervall nicht auf den nächsten langen F1-Zyklus warten muss.
 # Jede Funktion prüft selbst anhand ihres eigenen "zuletzt gelaufen"-Zeitstempels ob sie an der
@@ -186,6 +217,8 @@ if F4_ENABLED and (len(F4_GATEWAY_PATTERN) < 4 or len(F4_GATEWAY_PATTERN) > 128)
 LOOP_TICK = CHECK_INTERVAL
 if F4_ENABLED:
     LOOP_TICK = min(LOOP_TICK, F4_CHECK_INTERVAL)
+if F5_ENABLED:
+    LOOP_TICK = min(LOOP_TICK, F5_CHECK_INTERVAL)
 LOOP_TICK = max(15, LOOP_TICK)
 
 _f3_weekdays_str = ','.join(str(w) for w in sorted(F3_WEEKDAYS))
@@ -197,6 +230,12 @@ log.info(
     f'F4(MQTT-Watchdog)={"an" if F4_ENABLED else "aus"} (Intervall {F4_CHECK_INTERVAL}s) '
     f'(Mosquitto={F4_MOSQUITTO_SERVICE}, Autorestart={"an" if F4_MOSQUITTO_AUTORESTART else "aus"} | '
     f'Gateway={F4_GATEWAY_PATTERN}, Autorestart={"an" if F4_GATEWAY_AUTORESTART else "aus"}) | '
+    f'F5(System-Diagnose)={"an" if F5_ENABLED else "aus"} (Intervall {F5_CHECK_INTERVAL}s, '
+    f'Disk={"an" if F5_DISK_MONITOR else "aus"} RAM={"an" if F5_MEMORY_MONITOR else "aus"} '
+    f'Temp={"an" if F5_TEMP_MONITOR else "aus"} '
+    f'Internet={"an" if F5_INTERNET_MONITOR else "aus"}/Heal={"an" if F5_INTERNET_AUTOHEAL else "aus"} '
+    f'Zeit={"an" if F5_TIME_MONITOR else "aus"}/Heal={"an" if F5_TIME_AUTOHEAL else "aus"} '
+    f'Dienste={"an" if F5_SERVICES_MONITOR else "aus"}/Heal={"an" if F5_SERVICES_AUTOHEAL else "aus"}) | '
     f'MQTT={"an" if MQTT_ENABLED else "aus"} | Loop-Takt={LOOP_TICK}s'
 )
 
@@ -525,14 +564,160 @@ def check_gateway_mqtt_status(mqtt_prefix, max_age_s=900):
     return {'checked': True, 'connected': connected, 'stale': stale, 'status_text': status_text, 'detail': ''}
 
 # ---------------------------------------------------------------------------
+# Funktion 5: System-Diagnose (Speicher, RAM, CPU-Temperatur, Internet, Zeit-Synchronisation,
+# weitere LoxBerry-Kerndienste) – typische Ursachen für einen Vor-Ort-Einsatz bei Kunden.
+# Reine Status-Checks brauchen kein Root; die drei Auto-Heal-Aktionen (Netzwerk neu starten,
+# Zeit-Sync neu starten, restart_service für weitere Dienste) laufen über denselben
+# validierenden Root-Helper wie Funktion 1/4.
+# ---------------------------------------------------------------------------
+def check_disk_usage(path='/'):
+    try:
+        usage = shutil.disk_usage(path)
+        percent = round((usage.total - usage.free) / usage.total * 100, 1)
+        return {'ok': True, 'percent': percent}
+    except Exception as e:
+        return {'ok': False, 'percent': None, 'error': str(e)[:120]}
+
+def check_memory_usage():
+    try:
+        info = {}
+        with open('/proc/meminfo') as f:
+            for line in f:
+                k, _, v = line.partition(':')
+                info[k.strip()] = int(v.strip().split()[0])  # kB
+        total = info.get('MemTotal', 0)
+        avail = info.get('MemAvailable', info.get('MemFree', 0))
+        if total <= 0:
+            return {'ok': False, 'percent': None}
+        percent = round((total - avail) / total * 100, 1)
+        return {'ok': True, 'percent': percent}
+    except Exception as e:
+        return {'ok': False, 'percent': None, 'error': str(e)[:120]}
+
+def check_cpu_temperature():
+    """Bevorzugt die generische thermal_zone-Schnittstelle (kein Root, auf praktisch jedem
+    Linux-System vorhanden) – vcgencmd (Raspberry-spezifisch) nur als Fallback."""
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp') as f:
+            millideg = int(f.read().strip())
+        return {'ok': True, 'temp_c': round(millideg / 1000, 1)}
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(['vcgencmd', 'measure_temp'], capture_output=True, text=True, timeout=5)
+        m = re.search(r'temp=([\d.]+)', r.stdout)
+        if m:
+            return {'ok': True, 'temp_c': float(m.group(1))}
+    except Exception:
+        pass
+    return {'ok': False, 'temp_c': None}
+
+def check_time_sync():
+    """Nutzt systemds eigene Sync-Bewertung (timedatectl) statt selbst eine NTP-Abfrage zu
+    bauen – deutlich robuster und ohne zusätzliche Abhängigkeit."""
+    try:
+        r = subprocess.run(
+            ['timedatectl', 'show', '--property=NTPSynchronized,SystemClockSynchronized', '--value'],
+            capture_output=True, text=True, timeout=10,
+        )
+        vals = [v.strip().lower() for v in r.stdout.splitlines() if v.strip()]
+        if not vals:
+            return {'ok': False, 'synced': None}
+        return {'ok': True, 'synced': any(v == 'yes' for v in vals)}
+    except Exception as e:
+        return {'ok': False, 'synced': None, 'error': str(e)[:120]}
+
+def restart_networking():
+    rc, out, err = run_helper('restart_networking', timeout=30)
+    if rc != 0:
+        log.error(f'Netzwerk-Neustart fehlgeschlagen (RC={rc}): {(err or out).strip()[:300]}')
+        return False
+    return True
+
+def sync_time_now():
+    rc, out, err = run_helper('sync_time', timeout=20)
+    if rc != 0:
+        log.error(f'Zeit-Synchronisation fehlgeschlagen (RC={rc}): {(err or out).strip()[:300]}')
+        return False
+    return True
+
+# ---------------------------------------------------------------------------
+# Health-Ampel: fasst F1/F4/F5 zu einem einzigen Status (green/yellow/red) + Klartext-Liste
+# zusammen – für eine Ein-Blick-Übersicht über viele Standorte (Status-Tab + MQTT-Ampel-Topic).
+# ---------------------------------------------------------------------------
+def compute_health(state):
+    crit, warn = [], []
+
+    if F1_ENABLED and state.get('netbird_connected') is False:
+        crit.append('Netbird nicht verbunden')
+
+    if F4_ENABLED:
+        if state.get('mosquitto_healthy') is False:
+            crit.append('Mosquitto nicht erreichbar')
+        if state.get('gateway_healthy') is False:
+            crit.append('MQTT-Gateway nicht verbunden')
+
+    if F5_DISK_MONITOR:
+        lvl = state.get('diag_disk_level')
+        if lvl == 'crit':
+            crit.append(f"Speicher kritisch ({state.get('diag_disk_percent', '?')}%)")
+        elif lvl == 'warn':
+            warn.append(f"Speicher knapp ({state.get('diag_disk_percent', '?')}%)")
+
+    if F5_MEMORY_MONITOR and state.get('diag_memory_level') == 'warn':
+        warn.append(f"RAM-Auslastung hoch ({state.get('diag_memory_percent', '?')}%)")
+
+    if F5_TEMP_MONITOR and state.get('diag_temp_available'):
+        lvl = state.get('diag_temp_level')
+        if lvl == 'crit':
+            crit.append(f"CPU-Temperatur kritisch ({state.get('diag_temp_c', '?')}°C)")
+        elif lvl == 'warn':
+            warn.append(f"CPU-Temperatur hoch ({state.get('diag_temp_c', '?')}°C)")
+
+    if F5_INTERNET_MONITOR and state.get('diag_internet_ok') is False:
+        crit.append('Kein Internet')
+
+    if F5_TIME_MONITOR and state.get('diag_time_synced') is False:
+        warn.append('Systemzeit nicht synchronisiert')
+
+    if F5_SERVICES_MONITOR:
+        for name, info in (state.get('diag_services') or {}).items():
+            if not info.get('healthy', True):
+                crit.append(f'Dienst {name} down')
+
+    if crit:
+        return 'red', crit + warn
+    if warn:
+        return 'yellow', warn
+    return 'green', []
+
+# ---------------------------------------------------------------------------
+# Menschenlesbare Labels für Aktionen – für das MQTT-Event-Topic (JSON-Payload). Deckt sich
+# inhaltlich mit hw4l_action_label() in common.php (dort für die PHP-UI).
+# ---------------------------------------------------------------------------
+ACTION_LABELS = {
+    'netbird_restart':      'Netbird-Dienst neu gestartet',
+    'mosquitto_restart':    'Mosquitto neu gestartet',
+    'gateway_restart':      'MQTT-Gateway neu gestartet',
+    'netbird_watchdog':     'Automatischer Reboot (Netbird-Eskalation)',
+    'scheduled_reboot':     'Automatischer Reboot (Zeitplan)',
+    'diag_internet_restart':'Netzwerk neu gestartet (Internet-Ausfall)',
+    'diag_time_restart':    'Zeit-Synchronisation neu gestartet',
+    'diag_service_restart': 'Dienst neu gestartet',
+}
+
+# ---------------------------------------------------------------------------
 # Aktions-Historie: append-only Liste signifikanter Ereignisse (Neustarts, Reboots) für die
 # "Letzte Aktionen"-Anzeige im Status-Tab und die volle Historie im Log-Tab. Auf 200 Einträge
-# gedeckelt, damit state.json nicht unbegrenzt wächst.
+# gedeckelt, damit state.json nicht unbegrenzt wächst. Jede Aktion wird zusätzlich SOFORT als
+# eigenes MQTT-Event veröffentlicht (nicht erst beim nächsten Zyklus) – für Loxone-Benach-
+# richtigungen in Echtzeit statt erst nach dem nächsten Heartbeat.
 # ---------------------------------------------------------------------------
 def log_action(state, action, success=True, detail=''):
+    now = time.time()
     entry = {
-        'epoch': time.time(),
-        'time': fmt(time.time()),
+        'epoch': now,
+        'time': fmt(now),
         'action': action,
         'success': bool(success),
         'detail': detail,
@@ -541,6 +726,7 @@ def log_action(state, action, success=True, detail=''):
     action_log.append(entry)
     if len(action_log) > 200:
         del action_log[:len(action_log) - 200]
+    mqtt_publish_event(entry)
 
 def trigger_reboot(reason, state):
     log.critical(f'AUTOMATISCHER REBOOT ausgelöst – Grund: {reason}')
@@ -579,6 +765,31 @@ def cooldown_remaining_seconds(state):
 # Fehlschläge sind nicht kritisch – die Watchdog-Kernfunktion hängt nicht von MQTT ab.
 # Zugangsdaten (RESOLVED_MQTT_*) wurden bereits beim Start aufgelöst, siehe oben.
 # ---------------------------------------------------------------------------
+def mqtt_publish_event(entry):
+    """Veröffentlicht eine einzelne Aktion SOFORT (nicht retained, eigene Kurzverbindung) statt
+    erst beim nächsten Hauptschleifen-Zyklus über mqtt_publish_status() – damit eine Loxone-
+    Benachrichtigung bei jedem Neustart/Reboot in Echtzeit ausgelöst werden kann, nicht erst
+    Minuten später. Fehlschläge sind unkritisch, wie bei mqtt_publish_status()."""
+    if not (MQTT_ENABLED and MQTT_OK):
+        return
+    try:
+        broker, port = RESOLVED_MQTT_BROKER, RESOLVED_MQTT_PORT
+        auth = {'username': RESOLVED_MQTT_USER, 'password': RESOLVED_MQTT_PASS} if RESOLVED_MQTT_USER else None
+        payload = json.dumps({
+            'action':  entry['action'],
+            'label':   ACTION_LABELS.get(entry['action'], entry['action']),
+            'success': entry['success'],
+            'detail':  entry['detail'],
+            'time':    entry['time'],
+            'epoch':   int(entry['epoch']),
+        }, ensure_ascii=False)
+        mqtt_publish_mod.single(
+            f'{TOPIC_PREFIX}/event', payload=payload, hostname=broker, port=port, auth=auth,
+            client_id=f'HitWatch4Lox-{socket.gethostname()}-evt', qos=0, retain=False,
+        )
+    except Exception as e:
+        log.warning(f'MQTT: Event-Veröffentlichung fehlgeschlagen (unkritisch): {e}')
+
 def mqtt_publish_status(state):
     if not (MQTT_ENABLED and MQTT_OK):
         return
@@ -586,6 +797,8 @@ def mqtt_publish_status(state):
         broker, port = RESOLVED_MQTT_BROKER, RESOLVED_MQTT_PORT
         auth = {'username': RESOLVED_MQTT_USER, 'password': RESOLVED_MQTT_PASS} if RESOLVED_MQTT_USER else None
         msgs = [
+            {'topic': f'{TOPIC_PREFIX}/health',                   'payload': state.get('health', 'green'),                      'retain': True},
+            {'topic': f'{TOPIC_PREFIX}/health_detail',            'payload': state.get('health_detail', 'Alles OK'),            'retain': True},
             {'topic': f'{TOPIC_PREFIX}/status',                   'payload': state.get('status', 'OK'),                         'retain': True},
             {'topic': f'{TOPIC_PREFIX}/connected',                'payload': '1' if state.get('netbird_connected') else '0',    'retain': True},
             {'topic': f'{TOPIC_PREFIX}/management',                'payload': state.get('netbird_management', '?'),              'retain': True},
@@ -610,6 +823,17 @@ def mqtt_publish_status(state):
                 {'topic': f'{TOPIC_PREFIX}/gateway/restart_count',   'payload': str(int(state.get('gateway_restart_count', 0) or 0)),   'retain': True},
                 {'topic': f'{TOPIC_PREFIX}/gateway/broker_linked',   'payload': '1' if state.get('gateway_broker_linked') else '0',     'retain': True},
             ]
+        if F5_ENABLED:
+            if F5_DISK_MONITOR:
+                msgs.append({'topic': f'{TOPIC_PREFIX}/diag/disk_percent',   'payload': str(state.get('diag_disk_percent', '') or ''),   'retain': True})
+            if F5_MEMORY_MONITOR:
+                msgs.append({'topic': f'{TOPIC_PREFIX}/diag/memory_percent', 'payload': str(state.get('diag_memory_percent', '') or ''), 'retain': True})
+            if F5_TEMP_MONITOR and state.get('diag_temp_available'):
+                msgs.append({'topic': f'{TOPIC_PREFIX}/diag/temp_c',         'payload': str(state.get('diag_temp_c', '') or ''),         'retain': True})
+            if F5_INTERNET_MONITOR:
+                msgs.append({'topic': f'{TOPIC_PREFIX}/diag/internet_ok',    'payload': '1' if state.get('diag_internet_ok') else '0',   'retain': True})
+            if F5_TIME_MONITOR:
+                msgs.append({'topic': f'{TOPIC_PREFIX}/diag/time_synced',    'payload': '1' if state.get('diag_time_synced') else '0',   'retain': True})
         mqtt_publish_mod.multiple(
             msgs, hostname=broker, port=port, auth=auth,
             client_id=f'HitWatch4Lox-{socket.gethostname()}', qos=0,
@@ -676,10 +900,12 @@ def run():
     # unabhängig von ihrem jeweiligen Intervall (kein Warten auf den ersten vollen Zyklus).
     _last_f1_run = 0.0
     _last_f4_run = 0.0
+    _last_f5_run = 0.0
 
     log.info(
         f'HitWatch4Lox Daemon gestartet (Version {DAEMON_VERSION}, PID {os.getpid()}) – '
-        f'F1={F1_ENABLED} F2={F2_ENABLED} F3={F3_ENABLED} F4={F4_ENABLED} MQTT={MQTT_ENABLED and MQTT_OK}'
+        f'F1={F1_ENABLED} F2={F2_ENABLED} F3={F3_ENABLED} F4={F4_ENABLED} F5={F5_ENABLED} '
+        f'MQTT={MQTT_ENABLED and MQTT_OK}'
     )
 
     while True:
@@ -874,6 +1100,107 @@ def run():
                         )
                         if not ok:
                             log.error('MQTT-Gateway nach Beenden nicht automatisch neu gestartet – bitte manuell prüfen (z.B. LoxBerry neu starten)')
+
+            # ---------------- Funktion 5: System-Diagnose ----------------
+            # Eigenes Intervall (F5_CHECK_INTERVAL, Standard 120s). Jedes Thema ist einzeln per
+            # Monitor-Flag steuerbar; die drei Auto-Heal-Aktionen (Netzwerk, Zeit-Sync, weitere
+            # Kerndienste) sind bewusst restart-basiert und daher nur eigenständig schaltbar.
+            if F5_ENABLED and (now - _last_f5_run >= F5_CHECK_INTERVAL):
+                _last_f5_run = now
+                state['diag_last_check_epoch'] = now
+                state['diag_last_check']       = fmt(now)
+
+                if F5_DISK_MONITOR:
+                    d = check_disk_usage()
+                    state['diag_disk_percent'] = d.get('percent')
+                    lvl = 'unknown'
+                    if d['ok']:
+                        lvl = 'crit' if d['percent'] >= F5_DISK_CRIT_PCT else ('warn' if d['percent'] >= F5_DISK_WARN_PCT else 'ok')
+                        if lvl != 'ok':
+                            log.warning(f"Speicherplatz {'kritisch' if lvl == 'crit' else 'knapp'}: {d['percent']}% belegt auf /")
+                    state['diag_disk_level'] = lvl
+
+                if F5_MEMORY_MONITOR:
+                    mem = check_memory_usage()
+                    state['diag_memory_percent'] = mem.get('percent')
+                    lvl = 'unknown'
+                    if mem['ok']:
+                        lvl = 'warn' if mem['percent'] >= F5_MEMORY_WARN_PCT else 'ok'
+                        if lvl == 'warn':
+                            log.warning(f"RAM-Auslastung hoch: {mem['percent']}%")
+                    state['diag_memory_level'] = lvl
+
+                if F5_TEMP_MONITOR:
+                    t = check_cpu_temperature()
+                    state['diag_temp_available'] = t['ok']
+                    state['diag_temp_c'] = t.get('temp_c')
+                    lvl = 'unknown'
+                    if t['ok']:
+                        lvl = 'crit' if t['temp_c'] >= F5_TEMP_CRIT_C else ('warn' if t['temp_c'] >= F5_TEMP_WARN_C else 'ok')
+                        if lvl != 'ok':
+                            log.warning(f"CPU-Temperatur {'kritisch' if lvl == 'crit' else 'hoch'}: {t['temp_c']}°C")
+                    state['diag_temp_level'] = lvl
+
+                if F5_INTERNET_MONITOR:
+                    inet_ok = tcp_check(F5_INTERNET_HOST, F5_INTERNET_PORT, timeout=5)
+                    state['diag_internet_ok'] = inet_ok
+                    if not inet_ok:
+                        log.warning(
+                            f'Internet nicht erreichbar (TCP {F5_INTERNET_HOST}:{F5_INTERNET_PORT})'
+                            + (' – starte Netzwerk neu...' if F5_INTERNET_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.')
+                        )
+                        if F5_INTERNET_AUTOHEAL:
+                            ok = restart_networking()
+                            state['diag_internet_last_restart_epoch'] = now
+                            state['diag_internet_last_restart']       = fmt(now)
+                            state['diag_internet_restart_count']      = int(state.get('diag_internet_restart_count', 0) or 0) + (1 if ok else 0)
+                            log_action(state, 'diag_internet_restart', success=ok)
+
+                if F5_TIME_MONITOR:
+                    ts = check_time_sync()
+                    state['diag_time_synced'] = ts.get('synced')
+                    if ts['ok'] and ts['synced'] is False:
+                        log.warning(
+                            'Systemzeit nicht synchronisiert (NTP)'
+                            + (' – starte Zeit-Synchronisation neu...' if F5_TIME_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.')
+                        )
+                        if F5_TIME_AUTOHEAL:
+                            ok = sync_time_now()
+                            state['diag_time_last_restart_epoch'] = now
+                            state['diag_time_last_restart']       = fmt(now)
+                            state['diag_time_restart_count']      = int(state.get('diag_time_restart_count', 0) or 0) + (1 if ok else 0)
+                            log_action(state, 'diag_time_restart', success=ok)
+
+                if F5_SERVICES_MONITOR and F5_SERVICES_LIST:
+                    diag_services = state.setdefault('diag_services', {})
+                    for svc in F5_SERVICES_LIST:
+                        s = get_service_state(svc)
+                        prev = diag_services.get(svc, {})
+                        entry = {
+                            'active_state': s['active_state'], 'sub_state': s['sub_state'], 'healthy': s['healthy'],
+                            'restart_count':      int(prev.get('restart_count', 0) or 0),
+                            'last_restart':       prev.get('last_restart', '–'),
+                            'last_restart_epoch': int(prev.get('last_restart_epoch', 0) or 0),
+                        }
+                        if not s['healthy']:
+                            log.warning(
+                                f"Dienst {svc} nicht aktiv ({s['active_state']}/{s['sub_state']})"
+                                + (' – starte neu...' if F5_SERVICES_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Neustart.')
+                            )
+                            if F5_SERVICES_AUTOHEAL:
+                                ok = restart_service(svc)
+                                entry['restart_count']      = entry['restart_count'] + (1 if ok else 0)
+                                entry['last_restart']       = fmt(now)
+                                entry['last_restart_epoch'] = now
+                                log_action(state, 'diag_service_restart', success=ok, detail=svc)
+                        diag_services[svc] = entry
+
+            # ---------------- Health-Ampel ----------------
+            # Fasst F1/F4/F5 zu einem Gesamtstatus zusammen – läuft jeden Tick (billig, liest nur
+            # bereits berechneten State), damit die Ampel nie älter ist als die letzte Persistenz.
+            _health, _problems = compute_health(state)
+            state['health']        = _health
+            state['health_detail'] = '; '.join(_problems) if _problems else 'Alles OK'
 
             # ---------------- Heartbeat / Persistenz ----------------
             if now - _last_heartbeat > HEARTBEAT_SECONDS:

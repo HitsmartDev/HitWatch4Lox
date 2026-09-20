@@ -43,6 +43,8 @@ echo "<INFO> Erstelle sudoers: ${SUDOERS}"
     printf 'loxberry ALL=(ALL) NOPASSWD: %s restart\n' "${HELPER}"
     printf 'loxberry ALL=(ALL) NOPASSWD: %s reboot\n' "${HELPER}"
     printf 'loxberry ALL=(ALL) NOPASSWD: %s restart_service *\n' "${HELPER}"
+    printf 'loxberry ALL=(ALL) NOPASSWD: %s restart_networking\n' "${HELPER}"
+    printf 'loxberry ALL=(ALL) NOPASSWD: %s sync_time\n' "${HELPER}"
 } > "${SUDOERS}"
 
 chmod 0440 "${SUDOERS}"

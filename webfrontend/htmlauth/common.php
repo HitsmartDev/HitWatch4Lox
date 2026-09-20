@@ -44,13 +44,26 @@ function h(?string $s): string {
 // Aktions-Historie: Icon + Label je Aktionstyp (state.json 'action_log' + last_auto_reboot_reason)
 function hw4l_action_label(string $action): array {
     static $map = [
-        'netbird_restart'  => ['🐦', 'Netbird-Dienst neugestartet'],
-        'mosquitto_restart'=> ['🦟', 'Mosquitto neugestartet'],
-        'gateway_restart'  => ['📡', 'MQTT-Gateway neugestartet'],
-        'netbird_watchdog' => ['🔄', 'Reboot ausgelöst – Netbird-Watchdog (Funktion 2)'],
-        'scheduled_reboot' => ['🗓️', 'Reboot ausgelöst – Automatischer Reboot (Funktion 3)'],
+        'netbird_restart'       => ['🐦', 'Netbird-Dienst neugestartet'],
+        'mosquitto_restart'     => ['🦟', 'Mosquitto neugestartet'],
+        'gateway_restart'       => ['📡', 'MQTT-Gateway neugestartet'],
+        'netbird_watchdog'      => ['🔄', 'Reboot ausgelöst – Netbird-Watchdog (Funktion 2)'],
+        'scheduled_reboot'      => ['🗓️', 'Reboot ausgelöst – Automatischer Reboot (Funktion 3)'],
+        'diag_internet_restart' => ['🌐', 'Netzwerk neugestartet (Internet-Ausfall, Funktion 5)'],
+        'diag_time_restart'     => ['🕒', 'Zeit-Synchronisation neugestartet (Funktion 5)'],
+        'diag_service_restart'  => ['🛠️', 'Dienst neugestartet (Funktion 5)'],
     ];
     return $map[$action] ?? ['❔', $action];
+}
+
+// Health-Ampel: Farbe/Icon/Label je Zustand (state.json 'health' – 'green'/'yellow'/'red')
+function hw4l_health_badge(string $level): array {
+    static $map = [
+        'green'  => ['ok',   '🟢', 'Alles OK'],
+        'yellow' => ['warn', '🟡', 'Warnung'],
+        'red'    => ['err',  '🔴', 'Fehler'],
+    ];
+    return $map[$level] ?? ['', '⚪', 'Unbekannt'];
 }
 
 function render_header(string $active): void

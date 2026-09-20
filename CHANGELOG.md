@@ -5,6 +5,34 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.1] – 2026-09-20
+
+### Hinzugefügt – Funktion 5: System-Diagnose (Auto-Heal)
+- Neue Funktion überwacht typische Vor-Ort-Einsatz-Ursachen: Speicherplatz (Root-Partition),
+  RAM-Auslastung, CPU-Temperatur, Internet-Erreichbarkeit (getrennt von der Netbird-Prüfung
+  in Funktion 1), Zeit-Synchronisation (NTP) sowie eine frei konfigurierbare Liste weiterer
+  LoxBerry-Kerndienste (z.B. `lighttpd`, `cron`, `ssh`).
+- Anders als Funktion 4 ist hier **jedes Thema einzeln sowohl im Monitoring als auch im
+  Auto-Heal** schaltbar (Nutzerwunsch) – manche Standorte sollen ggf. nur beobachtet werden.
+  Auto-Heal beschränkt sich bewusst auf Dienst-/Netzwerk-Neustarts (Internet: Netzwerk-Dienst
+  neu starten; Zeit: `systemd-timesyncd` neu starten; weitere Dienste: `systemctl restart`
+  über denselben validierten Root-Helper wie Funktion 4). Speicherplatz/RAM/Temperatur haben
+  bewusst KEIN Auto-Heal – ein Neustart löst diese Probleme nicht.
+- Root-Helper um zwei neue, argumentlose Unterbefehle erweitert: `restart_networking` und
+  `sync_time`.
+
+### Hinzugefügt – MQTT-Ampel + Sofort-Event
+- Neues Ampel-Topic `health` (green/yellow/red) + `health_detail` (Klartext-Problemliste) fasst
+  Funktion 1/4/5 zu einem Gesamtstatus zusammen – für eine Ein-Blick-Übersicht über viele
+  Standorte in Loxone, ohne jedes Einzel-Topic selbst auswerten zu müssen. Auf der Statusseite
+  jetzt auch als Banner ganz oben sichtbar.
+- Neues Event-Topic `event` (NICHT retained, JSON-Payload) wird ab sofort bei jedem
+  Dienst-/Prozess-Neustart oder Reboot **sofort** veröffentlicht statt erst beim nächsten
+  regulären Prüfzyklus – ermöglicht eine Loxone-Benachrichtigung in Echtzeit statt mit
+  Verzögerung von bis zu mehreren Minuten.
+
+---
+
 ## [1.0] – 2026-09-18
 
 ### Geändert – UI-Übersicht (Daemon-Steuerung an oberste Stelle)

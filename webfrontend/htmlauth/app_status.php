@@ -28,6 +28,18 @@ $f4_gw_autorestart   = $f4_enabled && ($cfg['MQTT_WATCHDOG']['GATEWAY_AUTORESTAR
 $f4_mosq_service = $cfg['MQTT_WATCHDOG']['MOSQUITTO_SERVICE'] ?? 'mosquitto';
 $f4_gw_pattern   = $cfg['MQTT_WATCHDOG']['GATEWAY_PROCESS_PATTERN'] ?? 'mqttgateway.pl';
 $f4_check_interval = (int)($cfg['MQTT_WATCHDOG']['CHECK_INTERVAL'] ?? 60);
+$f5_enabled = ($cfg['SYSTEM_DIAGNOSTICS']['ENABLED'] ?? '0') == '1';
+$f5_check_interval = (int)($cfg['SYSTEM_DIAGNOSTICS']['CHECK_INTERVAL'] ?? 120);
+$f5_disk_monitor     = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['DISK_MONITOR'] ?? '1') == '1';
+$f5_memory_monitor   = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['MEMORY_MONITOR'] ?? '1') == '1';
+$f5_temp_monitor     = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['TEMP_MONITOR'] ?? '1') == '1';
+$f5_internet_monitor = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_MONITOR'] ?? '1') == '1';
+$f5_internet_autoheal= $f5_internet_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_AUTOHEAL'] ?? '0') == '1';
+$f5_time_monitor     = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['TIME_MONITOR'] ?? '1') == '1';
+$f5_time_autoheal    = $f5_time_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['TIME_AUTOHEAL'] ?? '0') == '1';
+$f5_services_monitor = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['SERVICES_MONITOR'] ?? '0') == '1';
+$f5_services_autoheal= $f5_services_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['SERVICES_AUTOHEAL'] ?? '0') == '1';
+$f5_services_list = array_filter(array_map('trim', explode(',', $cfg['SYSTEM_DIAGNOSTICS']['SERVICES_LIST'] ?? '')));
 
 // ── Daemon-Status (PID-Check + Prozessname) ──
 $pidfile        = $lbplogdir . '/daemon.pid';
@@ -104,8 +116,20 @@ $is_stale = ($f1_enabled && $daemon_running && $last_check_epoch > 0 && $age > (
 
 $action_log = array_reverse($state['action_log'] ?? []); // neueste zuerst
 
+$health        = $state['health'] ?? 'green';
+$health_detail = $state['health_detail'] ?? 'Alles OK';
+[$_hbClass, $_hbIcon, $_hbLabel] = hw4l_health_badge($health);
+
 render_header('app_status');
 ?>
+
+<!-- ================================================================
+     GESAMTSTATUS-AMPEL
+     ================================================================ -->
+<div class="sl-flash <?= $_hbClass ?>" style="display:flex;align-items:center;gap:0.5rem;font-weight:700">
+    <span style="font-size:1.1rem"><?= $_hbIcon ?></span>
+    <span><?= h($_hbLabel) ?><?= $health !== 'green' ? ': ' . h($health_detail) : '' ?></span>
+</div>
 
 <!-- ================================================================
      DAEMON STATUS & STEUERUNG
@@ -314,6 +338,100 @@ render_header('app_status');
 </div>
 <?php endif; ?>
 
+<?php if ($f5_enabled): ?>
+<!-- ================================================================
+     SYSTEM-DIAGNOSE
+     ================================================================ -->
+<div class="sl-card">
+    <div class="sl-card-head">
+        <span class="sl-card-head-title">🩺 System-Diagnose</span>
+    </div>
+    <div class="sl-card-body">
+<?php
+    $diag_last_check       = $state['diag_last_check'] ?? '–';
+    $diag_last_check_epoch = (int)($state['diag_last_check_epoch'] ?? 0);
+    $diag_age      = $diag_last_check_epoch > 0 ? time() - $diag_last_check_epoch : 0;
+    $diag_is_stale = ($diag_last_check_epoch > 0 && $diag_age > ($f5_check_interval * 3 + 60));
+?>
+        <ul class="sl-info-list">
+            <li><span class="sl-info-key">Letzte Prüfung</span>
+                <span class="sl-info-val <?= $diag_is_stale ? 'alert' : '' ?>"><?= h($diag_last_check) ?></span></li>
+            <li><span class="sl-info-key">Prüfintervall</span> <span class="sl-info-val"><?= $f5_check_interval ?> s</span></li>
+        </ul>
+<?php if ($f5_disk_monitor):
+    $d_pct = $state['diag_disk_percent'] ?? null;
+    $d_lvl = $state['diag_disk_level'] ?? 'unknown';
+?>
+        <ul class="sl-info-list">
+            <li><span class="sl-info-key">💾 Speicherplatz (/)</span>
+                <span class="sl-info-val <?= $d_lvl === 'crit' ? 'alert' : ($d_lvl === 'warn' ? 'warn' : '') ?>">
+                    <?= $d_pct !== null ? h($d_pct) . '% belegt' : 'nicht ermittelbar' ?></span></li>
+        </ul>
+<?php endif; ?>
+<?php if ($f5_memory_monitor):
+    $m_pct = $state['diag_memory_percent'] ?? null;
+    $m_lvl = $state['diag_memory_level'] ?? 'unknown';
+?>
+        <ul class="sl-info-list">
+            <li><span class="sl-info-key">🧠 RAM-Auslastung</span>
+                <span class="sl-info-val <?= $m_lvl === 'warn' ? 'warn' : '' ?>">
+                    <?= $m_pct !== null ? h($m_pct) . '%' : 'nicht ermittelbar' ?></span></li>
+        </ul>
+<?php endif; ?>
+<?php if ($f5_temp_monitor):
+    $t_c   = $state['diag_temp_c'] ?? null;
+    $t_lvl = $state['diag_temp_level'] ?? 'unknown';
+    $t_avail = (bool)($state['diag_temp_available'] ?? false);
+?>
+        <ul class="sl-info-list">
+            <li><span class="sl-info-key">🌡️ CPU-Temperatur</span>
+                <span class="sl-info-val <?= $t_lvl === 'crit' ? 'alert' : ($t_lvl === 'warn' ? 'warn' : '') ?>">
+                    <?= $t_avail && $t_c !== null ? h($t_c) . '°C' : 'nicht ermittelbar' ?></span></li>
+        </ul>
+<?php endif; ?>
+<?php if ($f5_internet_monitor):
+    $i_ok = (bool)($state['diag_internet_ok'] ?? true);
+?>
+        <ul class="sl-info-list">
+            <li><span class="sl-info-key">🌐 Internet-Erreichbarkeit</span>
+                <span class="sl-info-val <?= $i_ok ? 'ok' : 'alert' ?>"><?= $i_ok ? 'erreichbar' : 'nicht erreichbar' ?></span></li>
+            <li><span class="sl-info-key">Auto-Heal</span>
+                <span class="sl-info-val" style="color:<?= $f5_internet_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_internet_autoheal ? 'An' : 'Aus' ?></span></li>
+        </ul>
+<?php endif; ?>
+<?php if ($f5_time_monitor):
+    $ts = $state['diag_time_synced'] ?? null;
+?>
+        <ul class="sl-info-list">
+            <li><span class="sl-info-key">🕒 Zeit-Synchronisation</span>
+                <span class="sl-info-val <?= $ts === false ? 'warn' : ($ts === true ? 'ok' : '') ?>">
+                    <?= $ts === true ? 'synchronisiert' : ($ts === false ? 'nicht synchronisiert' : 'nicht ermittelbar') ?></span></li>
+            <li><span class="sl-info-key">Auto-Heal</span>
+                <span class="sl-info-val" style="color:<?= $f5_time_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_time_autoheal ? 'An' : 'Aus' ?></span></li>
+        </ul>
+<?php endif; ?>
+<?php if ($f5_services_monitor && $f5_services_list):
+    $diag_services = $state['diag_services'] ?? [];
+?>
+        <div class="sl-section-title">🛠️ Weitere Kern-Dienste</div>
+        <ul class="sl-info-list">
+<?php foreach ($f5_services_list as $svc):
+    $si = $diag_services[$svc] ?? ['active_state' => '?', 'sub_state' => '', 'healthy' => null];
+?>
+            <li><span class="sl-info-key"><?= h($svc) ?></span>
+                <span class="sl-info-val <?= $si['healthy'] === false ? 'alert' : ($si['healthy'] === true ? 'ok' : '') ?>">
+                    <?= h($si['active_state']) ?><?= $si['sub_state'] ? ' / ' . h($si['sub_state']) : '' ?></span></li>
+<?php endforeach; ?>
+        </ul>
+        <p class="sl-hint">Auto-Heal für diese Dienste: <b style="color:<?= $f5_services_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_services_autoheal ? 'An' : 'Aus' ?></b></p>
+<?php endif; ?>
+        <p class="sl-hint" style="margin-top:0.5rem">Reine Vor-Ort-Diagnose – erkennt typische Ursachen für einen
+            Techniker-Einsatz (volle SD-Karte, kein Internet, Zeitabweichung, …). Auto-Heal ist bewusst auf
+            Dienst-/Netzwerk-Neustarts beschränkt, siehe Einstellungen.</p>
+    </div>
+</div>
+<?php endif; ?>
+
 <!-- ================================================================
      FUNKTIONEN-ÜBERSICHT
      ================================================================ -->
@@ -338,6 +456,10 @@ render_header('app_status');
             <div class="sl-stat">
                 <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f4_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_enabled ? 'An' : 'Aus' ?></div>
                 <div class="sl-stat-lbl">F4 – MQTT-Watchdog</div>
+            </div>
+            <div class="sl-stat">
+                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f5_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_enabled ? 'An' : 'Aus' ?></div>
+                <div class="sl-stat-lbl">F5 – System-Diagnose</div>
             </div>
         </div>
         <?php if ($f3_enabled):
