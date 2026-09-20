@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.2'
+DAEMON_VERSION = '1.3'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -596,35 +596,52 @@ def check_memory_usage():
 
 def check_cpu_temperature():
     """Bevorzugt die generische thermal_zone-Schnittstelle (kein Root, auf praktisch jedem
-    Linux-System vorhanden) – vcgencmd (Raspberry-spezifisch) nur als Fallback."""
-    try:
-        with open('/sys/class/thermal/thermal_zone0/temp') as f:
-            millideg = int(f.read().strip())
-        return {'ok': True, 'temp_c': round(millideg / 1000, 1)}
-    except Exception:
-        pass
+    Linux-System vorhanden) – probiert ALLE vorhandenen Zonen durch (nicht nur zone0, das auf
+    manchen Systemen ein anderer Sensor als die CPU belegt), vcgencmd (Raspberry-spezifisch) nur
+    als letzter Fallback. Liefert bei Fehlschlag eine Fehlerliste statt stumm 'nicht ermittelbar'
+    zu sein – nicht jede Hardware (z.B. manche x86-VMs ohne durchgereichten Sensor) hat
+    überhaupt einen lesbaren Temperatursensor, das ist ein legitimer Fall, aber diagnostizierbar."""
+    errors = []
+    for zone in sorted(glob.glob('/sys/class/thermal/thermal_zone*/temp')):
+        try:
+            with open(zone) as f:
+                millideg = int(f.read().strip())
+            return {'ok': True, 'temp_c': round(millideg / 1000, 1)}
+        except Exception as e:
+            errors.append(f'{zone}: {e}')
+    if not errors:
+        errors.append('kein /sys/class/thermal/thermal_zone*/temp vorhanden')
     try:
         r = subprocess.run(['vcgencmd', 'measure_temp'], capture_output=True, text=True, timeout=5)
         m = re.search(r'temp=([\d.]+)', r.stdout)
         if m:
             return {'ok': True, 'temp_c': float(m.group(1))}
-    except Exception:
-        pass
-    return {'ok': False, 'temp_c': None}
+        errors.append(f"vcgencmd: {(r.stderr or r.stdout or 'keine Ausgabe').strip()[:100]}")
+    except FileNotFoundError:
+        errors.append('vcgencmd nicht installiert (kein Raspberry Pi?)')
+    except Exception as e:
+        errors.append(f'vcgencmd: {e}')
+    return {'ok': False, 'temp_c': None, 'error': '; '.join(errors)[:250]}
 
 def check_time_sync():
     """Nutzt systemds eigene Sync-Bewertung (timedatectl) statt selbst eine NTP-Abfrage zu
-    bauen – deutlich robuster und ohne zusätzliche Abhängigkeit."""
+    bauen. Parst 'Key=Value'-Zeilen aus 'timedatectl show' OHNE das --value-Flag (das gibt es
+    erst ab systemd 230, 2016) – dasselbe robuste Muster wie get_service_state() weiter oben
+    (dort per 'systemctl show ... --property=...' bereits nachweislich funktionsfähig)."""
     try:
         r = subprocess.run(
-            ['timedatectl', 'show', '--property=NTPSynchronized,SystemClockSynchronized', '--value'],
+            ['timedatectl', 'show', '--property=NTPSynchronized,SystemClockSynchronized'],
             capture_output=True, text=True, timeout=10,
         )
-        vals = [v.strip().lower() for v in r.stdout.splitlines() if v.strip()]
-        if not vals:
+        props = {}
+        for line in r.stdout.splitlines():
+            if '=' in line:
+                k, v = line.split('=', 1)
+                props[k.strip()] = v.strip().lower()
+        if not props:
             err = (r.stderr or r.stdout or f'RC={r.returncode}, keine Ausgabe').strip()[:150]
             return {'ok': False, 'synced': None, 'error': err}
-        return {'ok': True, 'synced': any(v == 'yes' for v in vals)}
+        return {'ok': True, 'synced': any(v == 'yes' for v in props.values())}
     except FileNotFoundError:
         return {'ok': False, 'synced': None, 'error': 'timedatectl nicht installiert'}
     except Exception as e:
@@ -908,6 +925,11 @@ def run():
     _last_f1_run = 0.0
     _last_f4_run = 0.0
     _last_f5_run = 0.0
+    # "Sensor/Tool nicht vorhanden" (z.B. kein thermal_zone, kein timedatectl) ist ein
+    # dauerhafter Hardware-/Systemzustand, kein wiederkehrendes Problem wie ein toter Dienst –
+    # daher nur EINMAL pro Daemon-Lauf geloggt (Diagnose-Zweck), nicht bei jedem F5-Zyklus neu.
+    _temp_unavailable_logged = False
+    _time_unavailable_logged = False
 
     log.info(
         f'HitWatch4Lox Daemon gestartet (Version {DAEMON_VERSION}, PID {os.getpid()}) – '
@@ -1146,6 +1168,10 @@ def run():
                         lvl = 'crit' if t['temp_c'] >= F5_TEMP_CRIT_C else ('warn' if t['temp_c'] >= F5_TEMP_WARN_C else 'ok')
                         if lvl != 'ok':
                             log.warning(f"CPU-Temperatur {'kritisch' if lvl == 'crit' else 'hoch'}: {t['temp_c']}°C")
+                        _temp_unavailable_logged = False
+                    elif not _temp_unavailable_logged:
+                        log.warning(f"CPU-Temperatur nicht ermittelbar: {t.get('error', 'unbekannter Grund')}")
+                        _temp_unavailable_logged = True
                     state['diag_temp_level'] = lvl
 
                 if F5_INTERNET_MONITOR:
@@ -1167,11 +1193,15 @@ def run():
                     ts = check_time_sync()
                     state['diag_time_synced'] = ts.get('synced')
                     if not ts['ok']:
-                        log.warning(
-                            'Zeit-Synchronisationsstatus nicht ermittelbar (timedatectl lieferte '
-                            f"keinen Wert): {ts.get('error', 'unbekannter Grund')}"
-                        )
-                    elif ts['synced'] is False:
+                        if not _time_unavailable_logged:
+                            log.warning(
+                                'Zeit-Synchronisationsstatus nicht ermittelbar (timedatectl '
+                                f"lieferte keinen Wert): {ts.get('error', 'unbekannter Grund')}"
+                            )
+                            _time_unavailable_logged = True
+                    else:
+                        _time_unavailable_logged = False
+                    if ts['ok'] and ts['synced'] is False:
                         log.warning(
                             'Systemzeit nicht synchronisiert (NTP)'
                             + (' – starte Zeit-Synchronisation neu...' if F5_TIME_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.')

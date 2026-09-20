@@ -5,6 +5,25 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.3] – 2026-09-20
+
+### Behoben – Zeit-Synchronisation & CPU-Temperatur dauerhaft "nicht ermittelbar" (Live-Test)
+- **Zeit-Synchronisation (root cause gefunden):** `check_time_sync()` rief `timedatectl show
+  --property=... --value` auf – das `--value`-Flag existiert erst ab systemd 230 (2016). Auf
+  älteren systemd-Versionen liefert der Aufruf keine verwertbare Ausgabe. Fix: Umstellung auf
+  dasselbe bewährte "Key=Value"-Parsing wie `get_service_state()` (dort bereits nachweislich
+  funktionsfähig, siehe Mosquitto-Erkennung in Funktion 4) statt auf `--value` zu bauen.
+- **CPU-Temperatur (robuster + diagnostizierbar):** `check_cpu_temperature()` probiert jetzt
+  ALLE vorhandenen `/sys/class/thermal/thermal_zone*/temp`-Zonen durch (vorher nur `zone0`, das
+  auf manchen Systemen einen anderen Sensor als die CPU belegt). Bleibt die Ermittlung trotzdem
+  erfolglos (z.B. weil die Hardware/VM keinen Sensor durchreicht), landet der genaue Grund jetzt
+  einmalig im Log statt still zu bleiben.
+- **Log-Spam vermieden:** "Sensor/Tool nicht vorhanden" ist ein dauerhafter Hardware-/
+  Systemzustand (anders als ein zwischenzeitlich abgestürzter Dienst) – wird daher nur EINMAL
+  pro Daemon-Lauf geloggt, nicht bei jedem Prüfzyklus neu.
+
+---
+
 ## [1.2] – 2026-09-20
 
 ### Behoben – MQTT-Statusveröffentlichung schlug bei jedem Zyklus fehl (v1.1-Regression)

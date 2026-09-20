@@ -139,9 +139,10 @@ einstellbar. <b>Kein Auto-Heal</b> – ein Neustart macht keinen Speicherplatz f
 Frühwarnung bevor die SD-Karte vollläuft.</li>
 <li><b>🧠 RAM-Auslastung:</b> % belegter Arbeitsspeicher (inkl. Cache-Bereinigung über
 <code>MemAvailable</code>). Kein Auto-Heal.</li>
-<li><b>🌡️ CPU-Temperatur:</b> liest die generische <code>thermal_zone0</code>-Schnittstelle (Fallback
-<code>vcgencmd</code> auf Raspberry Pi). Auf Geräten ohne lesbaren Sensor erscheint "nicht
-ermittelbar". Kein Auto-Heal.</li>
+<li><b>🌡️ CPU-Temperatur:</b> liest die generische <code>thermal_zone*</code>-Schnittstelle (probiert
+alle vorhandenen Zonen durch, Fallback <code>vcgencmd</code> auf Raspberry Pi). Auf Geräten ohne
+lesbaren Sensor (z.B. manche x86-VMs) erscheint "nicht ermittelbar" – der genaue Grund landet
+einmalig im Log. Kein Auto-Heal.</li>
 <li><b>🌐 Internet-Erreichbarkeit:</b> TCP-Verbindungstest gegen ein konfigurierbares Ziel (Standard
 1.1.1.1:53) – bewusst <b>getrennt</b> von der Netbird-Prüfung (Funktion 1), damit man
 unterscheiden kann ob beim Kunden das Internet weg ist oder nur Netbird selbst ein Problem hat.
@@ -150,7 +151,9 @@ unterscheiden kann ob beim Kunden das Internet weg ist oder nur Netbird selbst e
 <li><b>🕒 Zeit-Synchronisation:</b> fragt <code>timedatectl</code> ob die Systemzeit aktuell
 NTP-synchronisiert ist (keine eigene NTP-Abfrage nötig, nutzt systemds eigene Bewertung).
 Relevant u.a. für Funktion 3 (zeitgesteuerter Reboot) und TLS-Zertifikate. <b>Auto-Heal
-(optional):</b> startet <code>systemd-timesyncd</code> neu (Fallback <code>ntpdate</code>).</li>
+(optional):</b> startet <code>systemd-timesyncd</code> neu (Fallback <code>ntpdate</code>).
+Schlägt die Ermittlung fehl (z.B. <code>timedatectl</code> nicht installiert), landet der genaue
+Grund einmalig im Log.</li>
 <li><b>🛠️ Weitere Kern-Dienste:</b> eine frei konfigurierbare, kommagetrennte Liste zusätzlicher
 systemd-Dienste (z.B. <code>lighttpd</code>, <code>cron</code>, <code>ssh</code>) – Status wie bei
 Mosquitto in Funktion 4. <b>Auto-Heal (optional):</b> <code>systemctl restart</code> über denselben

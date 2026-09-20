@@ -1,9 +1,14 @@
 ## 📌 Projekt-Status
-- **Version:** 1.2 (2026-09-20: Live-Test von v1.1 zeigte sofort einen Regressions-Bug –
+- **Version:** 1.3 (2026-09-20: Zweiter Live-Test-Fund – Zeit-Synchronisation UND
+  CPU-Temperatur zeigten dauerhaft "nicht ermittelbar". Root Cause Zeit-Sync: `timedatectl show
+  --value` nutzt ein Flag das erst ab systemd 230 existiert – umgestellt auf dasselbe
+  "Key=Value"-Parsing wie `get_service_state()`. CPU-Temperatur: probiert jetzt alle
+  `thermal_zone*` statt nur `zone0`, UND loggt bei echtem Fehlschlag jetzt einmalig den genauen
+  Grund statt still zu bleiben.)
+  Basiert auf v1.2 (2026-09-20): Live-Test von v1.1 zeigte einen Regressions-Bug –
   `mqtt_publish_status()` gab bei JEDER Veröffentlichung einen TypeError, weil
   `publish.multiple()` anders als `publish.single()` kein globales `qos`-Argument kennt.
-  Fix verifiziert durch lokale Installation von `paho-mqtt` und Signaturprüfung. Nebenbei:
-  "Zeit-Synchronisation nicht ermittelbar" loggt jetzt den genauen `timedatectl`-Fehlgrund.)
+  Fix verifiziert durch lokale Installation von `paho-mqtt` und Signaturprüfung.
   Basiert auf v1.1 (2026-09-20): neue Funktion 5 "System-Diagnose" – Speicher/RAM/CPU-Temperatur/
   Internet/Zeit-Sync/weitere Kerndienste, jedes Thema einzeln im Monitoring UND Auto-Heal
   schaltbar. Dazu ein neues MQTT-Ampel-Topic (`health`/`health_detail`, fasst F1/F4/F5 zu einem
@@ -157,13 +162,29 @@
   `inspect.signature()` verifiziert, dann `qos=0` aus dem Aufruf entfernt. Zusätzlich:
   `check_time_sync()` loggt jetzt bei einer leeren/fehlgeschlagenen `timedatectl`-Ausgabe den
   genauen Grund (vorher stilles "nicht ermittelbar" ohne Diagnose-Möglichkeit).
+- **v1.3 – Zweiter Live-Test-Fund, root-cause behoben:** Nach v1.2 lief die Ampel/MQTT sauber,
+  aber Zeit-Synchronisation UND CPU-Temperatur zeigten weiterhin dauerhaft "nicht ermittelbar"
+  (Screenshot vom Nutzer). Statt zu raten, Code-Vergleich mit dem bereits bewährten
+  `get_service_state()`-Muster (nutzt `systemctl show --property=...` OHNE `--value`, bekanntlich
+  funktionsfähig da Mosquitto-Erkennung in Funktion 4 beim Nutzer bereits lief):
+  1. **Zeit-Sync root cause:** `check_time_sync()` nutzte `timedatectl show --value` – das
+     `--value`-Flag gibt es erst ab systemd 230 (2016). Umgestellt auf dasselbe "Key=Value"-
+     Zeilen-Parsing wie bei `get_service_state()`, kein `--value` mehr nötig.
+  2. **CPU-Temperatur:** könnte echtes Hardware-/VM-Limit sein (kein Sensor durchgereicht) statt
+     Bug – daher robuster gemacht (alle `thermal_zone*` statt nur `zone0` durchprobiert) UND vor
+     allem diagnostizierbar: loggt bei echtem Fehlschlag jetzt einmalig den genauen Grund
+     (welche Zonen/vcgencmd mit welchem Fehler scheiterten) statt still zu bleiben.
+  3. **Log-Spam-Vermeidung:** "Sensor/Tool nicht vorhanden" ist ein dauerhafter Zustand (anders
+     als ein zwischenzeitlich abgestürzter Dienst) – beide neuen Diagnose-Logs feuern daher nur
+     EINMAL pro Daemon-Lauf (`_temp_unavailable_logged`/`_time_unavailable_logged`-Flags in
+     `run()`, zurückgesetzt sobald die Ermittlung wieder erfolgreich ist).
 - **Noch offen:**
   - [ ] Funktion 5 (alle sechs Sub-Checks + Auto-Heal-Aktionen), die Health-Ampel und das
-    Event-Topic sind mangels Linux-Testumgebung im Rahmen dieser Session nur isoliert
-    (Funktionsebene, simulierter State) getestet, NICHT auf einem echten LoxBerry verifiziert.
-    Erster Live-Test bestätigte bereits Speicher/RAM/Internet-Anzeige als funktionierend; CPU-
-    Temperatur "nicht ermittelbar" ist auf Hardware ohne `thermal_zone0`/`vcgencmd` erwartet,
-    Zeit-Synchronisation "nicht ermittelbar" noch nicht mit dem neuen Diagnose-Log geklärt.
+    Event-Topic sind mangels Linux-Testumgebung nur isoliert (Funktionsebene, simulierter State)
+    getestet worden, nicht vollständig auf einem echten LoxBerry. Live-Test bestätigte bereits
+    Speicher/RAM/Internet-Anzeige und die MQTT-Ampel als funktionierend (nach v1.2-Fix). Ob
+    Zeit-Sync/CPU-Temperatur nach v1.3 beim Nutzer tatsächlich einen Wert liefern (oder ob die
+    Hardware schlicht keinen Sensor hat) steht noch aus.
   - [ ] **Mit v0.9 erstmals wirklich testbar:** v0.6 (falscher Erkennungsweg) → v0.7 (Fehler
     unsichtbar) → v0.8 (falsche Auth-Keys) → v0.9 (Timeout-Bug) verhinderten jeweils einen echten
     Funktionstest von "Verbindung zu Mosquitto". Exakten `loxberry/mqttgateway`-Topic-Pfad daher
@@ -368,6 +389,11 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.3 (2026-09-20):** Zeit-Synchronisation UND CPU-Temperatur zeigten weiterhin "nicht
+  ermittelbar" nach v1.2. Root Cause Zeit-Sync: `timedatectl show --value` (Flag erst ab systemd
+  230) – umgestellt auf dasselbe "Key=Value"-Parsing wie `get_service_state()`. CPU-Temperatur:
+  probiert jetzt alle `thermal_zone*`-Zonen statt nur `zone0`, loggt bei echtem Fehlschlag den
+  genauen Grund (einmalig pro Daemon-Lauf, kein Dauerspam).
 - **v1.2 (2026-09-20):** Live-Test-Regression aus v1.1 behoben: `mqtt_publish_status()` gab bei
   jeder Veröffentlichung einen `TypeError` (`multiple() got an unexpected keyword argument
   'qos'`) – `publish.multiple()` kennt kein globales `qos`-Argument, anders als `publish.single()`.
