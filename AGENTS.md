@@ -1,10 +1,18 @@
 ## 📌 Projekt-Status
-- **Version:** 1.6 (2026-09-21: Der Nutzer wollte das "Mindest-Ausfalldauer vor Eingriff"-Prinzip
+- **Version:** 1.7 (2026-09-21: KRITISCHER Live-Fund auf einem ZWEITEN Test-LoxBerry –
+  "Verbindung zu Mosquitto" zeigte dauerhaft "nicht verbunden"/"Herzschlag veraltet" trotz
+  laufendem Gateway-Prozess. Root Cause: `GATEWAY_MQTT_PREFIX` war fix auf den literalen String
+  "loxberry" verdrahtet, funktionierte am ERSTEN Testgerät nur weil dessen Hostname zufällig noch
+  "loxberry" war. Das Gateway veröffentlicht tatsächlich unter `<System-Hostname>/mqttgateway`
+  – auf dem zweiten Gerät (Hostname "loxberrybs") also unter einem komplett anderen Topic. Fix:
+  Präfix wird jetzt dynamisch aus `socket.gethostname()` (Python) bzw. `gethostname()` (PHP)
+  ermittelt, an beiden Stellen identisch. Damit funktionieren künftige Installationen auf
+  unterschiedlich benannten Kunden-LoxBerries automatisch korrekt, ohne manuelle
+  Pro-Gerät-Konfiguration.)
+  Basiert auf v1.6 (2026-09-21): Der Nutzer wollte das "Mindest-Ausfalldauer vor Eingriff"-Prinzip
   aus v1.5 (bisher nur Zeit-Sync) explizit auf ALLE Auto-Heal-Stellen im Plugin ausgeweitet
   wissen ("das sollte sich überall durchziehen") – jetzt konfigurierbar für Funktion 1 (Netbird),
-  Funktion 4 (Mosquitto, Gateway) und Funktion 5 (Internet, weitere Kerndienste). Defaults
-  bewusst so gewählt, dass sich am bisherigen Verhalten NICHTS ändert (0 min = sofort) außer bei
-  Internet (3 min) und Zeit-Sync (10 min), wo kurze Selbstheilung die Regel ist.)
+  Funktion 4 (Mosquitto, Gateway) und Funktion 5 (Internet, weitere Kerndienste).
   Basiert auf v1.2 (2026-09-20): Live-Test von v1.1 zeigte einen Regressions-Bug –
   `mqtt_publish_status()` gab bei JEDER Veröffentlichung einen TypeError, weil
   `publish.multiple()` anders als `publish.single()` kein globales `qos`-Argument kennt.
@@ -233,6 +241,28 @@
   4. UI: neuer `hw4l_autoheal_label()`-Helper in `common.php` für die konsistente Anzeige
      "Aus"/"An (sofort)"/"An (ab X min)" statt bisher nur "An"/"Aus" – ersetzt die vorher
      Zeit-Sync-spezifische Inline-Logik in `app_status.php`.
+- **v1.7 – Gateway-MQTT-Präfix: fixer "loxberry"-Default war ein Zufallstreffer, kein
+  verifizierter Fakt (KRITISCHER Live-Fund):** Die Diagnose auf einem ZWEITEN Test-LoxBerry
+  (Hostname "loxberrybs") zeigte: "Verbindung zu Mosquitto" dauerhaft "nicht verbunden", Log
+  "Herzschlag veraltet", OBWOHL der Gateway-Prozess lief und Loxone Config aktuelle,
+  live-tickende MQTT Virtual Inputs unter `loxberrybs_mqttgateway_status` zeigte (nicht
+  `loxberry_mqttgateway_status`!). Root Cause: Der seit v0.6 verwendete Default
+  `GATEWAY_MQTT_PREFIX=loxberry/mqttgateway` war IMMER ein Zufallstreffer – er funktionierte nur
+  weil das allererste Testgerät (aus der ursprünglichen v0.6-v0.9-Diagnose-Kette) zufällig noch
+  den LoxBerry-Werks-Hostnamen "loxberry" trug. Das MQTT-Gateway veröffentlicht tatsächlich unter
+  `<System-Hostname>/mqttgateway/...` – bei jedem umbenannten Gerät (in der Praxis der Normalfall
+  bei HitSmarts vielen Kundenstandorten, siehe [[user_role_hitsmart]]) griff der Default also
+  nie wirklich, sondern nur zufällig am Testgerät. Diese Altlast aus der Kette v0.6→v0.9 blieb bis
+  jetzt unentdeckt, weil bisher nur an genau diesem einen Gerät getestet wurde.
+  **Besonders tückisch:** Der falsche Präfix lieferte TROTZDEM einen Wert (eine alte retained
+  MQTT-Nachricht unter dem alten/falschen Präfix, vermutlich von vor einer Hostnamen-Änderung
+  oder einer früheren Testinstallation) – das äußerte sich als "Herzschlag veraltet" statt als
+  ehrliches "kein Wert unter diesem Präfix gefunden", was die wahre Ursache als reines
+  Timing-Problem getarnt hat. Fix: `F4_GATEWAY_MQTT_PREFIX_DEFAULT = f'{socket.gethostname()}/mqttgateway'`
+  in Python, `(gethostname() ?: 'loxberry') . '/mqttgateway'` identisch in PHP (app_settings.php
+  UND app_status.php) – Default-Zeile aus `hitwatch4lox.cfg.default` entfernt, damit der
+  dynamische Fallback greift statt eines festen Werts. Status-Tab zeigt jetzt zusätzlich den
+  effektiv verwendeten Präfix UND `gateway_broker_detail` (vorher nur im Log sichtbar).
 - **Noch offen:**
   - [ ] Die neuen Schwellwerte (F1/F4-Mosquitto/F4-Gateway/F5-Internet/F5-Services) sind wie
     Funktion 5 insgesamt nur isoliert getestet (Funktionsebene, `_unhealthy_elapsed_min()` per
@@ -245,15 +275,15 @@
     Persistenz-Schwelle (v1.5) beim Nutzer noch nicht verifiziert. CPU-Temperatur wird auf
     diesem konkreten (vermutlich virtualisierten) Gerät vermutlich dauerhaft "nicht ermittelbar"
     bleiben – kein weiterer Fixversuch geplant, da kein Sensor vorhanden ist.
-  - [ ] Erwägenswert (noch nicht angefragt): dieselbe Persistenz-Schwellen-Logik auch für
-    Internet-Auto-Heal (Funktion 5) einführen, falls sich dort dasselbe Muster (Neustart bei
-    jedem kurzen Blip) als unnötig aggressiv herausstellt.
-  - [ ] **Mit v0.9 erstmals wirklich testbar:** v0.6 (falscher Erkennungsweg) → v0.7 (Fehler
-    unsichtbar) → v0.8 (falsche Auth-Keys) → v0.9 (Timeout-Bug) verhinderten jeweils einen echten
-    Funktionstest von "Verbindung zu Mosquitto". Exakten `loxberry/mqttgateway`-Topic-Pfad daher
-    weiterhin nicht abschließend verifiziert – Stefan soll nach Installation von v0.9 prüfen ob
-    "Verbindung zu Mosquitto" jetzt "verbunden" zeigt; falls nicht, zeigt das Log jetzt den
-    genauen Grund (CONNACK-Fehlertext oder "kein Wert unter Präfix").
+  - [x] ~~Erwägenswert: Persistenz-Schwellen-Logik auch für Internet-Auto-Heal einführen~~ –
+    erledigt in v1.6, gleich generalisiert auf ALLE Auto-Heal-Stellen im Plugin.
+  - [x] ~~Exakten `loxberry/mqttgateway`-Topic-Pfad verifizieren~~ – **AUFGELÖST in v1.7:** war nie
+    wirklich verifiziert, nur ein Zufallstreffer am ersten Testgerät (Hostname zufällig noch
+    "loxberry"). Echte Ursache war ein hostnamen-abhängiger Topic-Präfix, siehe v1.7-Eintrag
+    oben. Kette v0.6 (falscher Erkennungsweg) → v0.7 (Fehler unsichtbar) → v0.8 (falsche
+    Auth-Keys) → v0.9 (Timeout-Bug) → v1.7 (Präfix-Default) zeigt: dieser eine Statuswert hatte
+    INSGESAMT fünf unabhängige Bugs hintereinander, bevor er auf einem zweiten Gerät endlich
+    wirklich funktionierte – ein Lehrstück dafür, an mehr als einem Gerät zu testen.
   - [ ] Mehrfachauswahl-UI F3, Frequenz-Zähler pro Wochentag, Fangfenster-Verhalten, Autorestart-
     Logik (Mosquitto + Gateway) und Aktions-Historie über mehrere Tage noch nicht auf echtem
     LoxBerry verifiziert.
@@ -460,6 +490,13 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.7 (2026-09-21):** MQTT-Gateway-Status-Präfix war seit v0.6 fix auf den literalen String
+  "loxberry" verdrahtet – funktionierte nur zufällig, weil das erste Testgerät noch diesen
+  Werks-Hostnamen trug. Auf einem zweiten Gerät (Hostname "loxberrybs") zeigte sich: das Gateway
+  veröffentlicht tatsächlich unter `<System-Hostname>/mqttgateway/...`. Präfix wird jetzt
+  dynamisch aus dem tatsächlichen Hostnamen ermittelt (Python UND PHP identisch), bleibt aber
+  überschreibbar. Status-Tab zeigt jetzt zusätzlich den effektiv genutzten Präfix und den
+  Verbindungs-Detailtext.
 - **v1.6 (2026-09-21):** Mindest-Ausfalldauer vor Auto-Heal (bisher nur Zeit-Sync, v1.5) jetzt
   konsistent für ALLE Auto-Heal-Aktionen konfigurierbar: Netbird (F1), Mosquitto + Gateway (F4),
   Internet + weitere Kerndienste (F5, letztere pro Dienst einzeln). Defaults bei 0 min (=sofort,
@@ -516,9 +553,10 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
   `inactive`/`dead` zurück statt eines Fehlers, UI zeigte daher dauerhaft falsche Daten.
   Fix: Prozess-Erkennung via `pgrep -f` (`GATEWAY_PROCESS_PATTERN`, Default `mqttgateway.pl`),
   Verbindungsstatus über die vom Gateway selbst veröffentlichten MQTT-Topics
-  (`GATEWAY_MQTT_PREFIX/status` + `/keepaliveepoch`, Default `loxberry/mqttgateway` – **noch
-  nicht verifiziert**) statt TCP-Heuristik. `link_check`-Root-Helper-Subcommand entfernt (nicht
-  mehr gebraucht), Gateway-Neustart jetzt unprivilegiert per `pkill` (kein sudo).
+  (`GATEWAY_MQTT_PREFIX/status` + `/keepaliveepoch`, Default damals `loxberry/mqttgateway` –
+  **in v1.7 korrigiert: dynamisch aus dem System-Hostnamen ermittelt, siehe dort**) statt
+  TCP-Heuristik. `link_check`-Root-Helper-Subcommand entfernt (nicht mehr gebraucht),
+  Gateway-Neustart jetzt unprivilegiert per `pkill` (kein sudo).
 - **v0.5 (2026-09-18):** Funktion 4 überarbeitet – `MOSQUITTO_ENABLED`/`GATEWAY_ENABLED` (steuerten
   Anzeige+Neustart zusammen) ersetzt durch `MOSQUITTO_AUTORESTART`/`GATEWAY_AUTORESTART` (nur noch
   Neustart; Status wird immer angezeigt sobald F4 an ist). Neuer Gateway↔Mosquitto-Verbindungscheck

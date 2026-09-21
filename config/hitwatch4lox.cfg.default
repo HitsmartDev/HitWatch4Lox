@@ -35,8 +35,11 @@ EVERY_N=1
 # --type=service | grep -i mqtt). Das LoxBerry MQTT-Gateway (mqttgateway.pl) ist dagegen KEIN
 # systemd-Dienst, sondern ein LoxBerry-Kern-Daemon – Erkennung über GATEWAY_PROCESS_PATTERN
 # (pgrep -f) und über den vom Gateway selbst veröffentlichten MQTT-Status
-# (GATEWAY_MQTT_PREFIX/status + /keepaliveepoch, z.B. sichtbar als "loxberry_mqttgateway_status"
-# in Loxone Config unter MQTT Virtual Inputs).
+# (GATEWAY_MQTT_PREFIX/status + /keepaliveepoch, sichtbar in Loxone Config unter MQTT Virtual
+# Inputs). GATEWAY_MQTT_PREFIX absichtlich NICHT hier gesetzt (Default): das Gateway
+# veröffentlicht unter <System-Hostname>/mqttgateway/... – der Daemon ermittelt diesen Präfix
+# beim Start automatisch über den tatsächlichen Hostnamen des Geräts. Nur setzen falls ein
+# konkretes Gerät davon abweicht (in den Einstellungen jederzeit überschreibbar).
 # *_UNHEALTHY_MIN: Mindest-Ausfalldauer bevor der jeweilige Dienst neu gestartet wird
 # (0 = sofort, bisheriges Verhalten). Konsistent mit Funktion 1/5 konfigurierbar.
 ENABLED=0
@@ -49,7 +52,6 @@ MOSQUITTO_PORT=1883
 GATEWAY_AUTORESTART=0
 GATEWAY_UNHEALTHY_MIN=0
 GATEWAY_PROCESS_PATTERN=mqttgateway.pl
-GATEWAY_MQTT_PREFIX=loxberry/mqttgateway
 
 [SYSTEM_DIAGNOSTICS]
 # Funktion 5: System-Diagnose – überwacht typische Vor-Ort-Einsatz-Ursachen (volle SD-Karte,

@@ -109,9 +109,12 @@ nicht. Die Erkennung läuft daher über zwei unabhängige Wege:</p>
 <li><b>Verbindungsstatus:</b> Das Gateway veröffentlicht seinen eigenen Verbindungszustand direkt
 als MQTT-Topic (<code>&lt;Präfix&gt;/status</code>, z.B. "Connected", plus einen Herzschlag
 <code>&lt;Präfix&gt;/keepaliveepoch</code>) – sichtbar in Loxone Config als MQTT Virtual Input
-<code>loxberry_mqttgateway_status</code>. HitWatch4Lox liest diese Werte direkt statt sie zu
-erraten – die zuverlässigste verfügbare Quelle, da sie vom Gateway selbst kommt. Ein veralteter
-Herzschlag (Standard &gt; 15 Min.) gilt ebenfalls als "nicht verbunden".</li>
+z.B. <code>&lt;hostname&gt;_mqttgateway_status</code>. HitWatch4Lox liest diese Werte direkt statt
+sie zu erraten – die zuverlässigste verfügbare Quelle, da sie vom Gateway selbst kommt. Ein
+veralteter Herzschlag (Standard &gt; 15 Min.) gilt ebenfalls als "nicht verbunden". Der Präfix
+wird beim Daemon-Start automatisch aus dem <b>tatsächlichen System-Hostnamen</b> dieses Geräts
+ermittelt (<code>&lt;hostname&gt;/mqttgateway</code>) – das Gateway veröffentlicht NICHT unter
+einem fixen "loxberry"-Präfix, sondern unter dem individuellen Hostnamen jedes Geräts.</li>
 </ul>
 <p>Ein Neustart-Versuch wird ausgelöst, wenn der Prozess entweder <b>gar nicht läuft</b> ODER
 <b>läuft, aber laut eigener Selbstauskunft nicht mit Mosquitto verbunden ist</b> – genau wie bei
@@ -129,6 +132,17 @@ das an MQTT-Zugangsdaten – manche Mosquitto-Installationen lehnen anonyme Verb
 (erkennbar an <code>mosquitto_sub ... Connection Refused: not authorised</code>). Der Daemon-Log
 zeigt seit dieser Version den genauen Grund. Das beeinträchtigt nur die Verbindungsanzeige – ob
 der Gateway-<b>Prozess</b> läuft, wird davon unabhängig zuverlässig per <code>pgrep</code> erkannt.</p>
+<p class="sl-hint"><b>Zeigt "Verbindung zu Mosquitto" dauerhaft "nicht verbunden" (nicht
+"nicht prüfbar"), obwohl der Prozess läuft?</b> Live-Fund: Ein zu diesem Zeitpunkt bereits
+falscher Präfix kann trotzdem einen Wert liefern – nämlich eine <b>alte, retained MQTT-Nachricht</b>
+von einer früheren Konfiguration oder einem früher anderen Hostnamen, die auf dem Broker
+"hängen geblieben" ist (retained Nachrichten bleiben bestehen bis sie explizit überschrieben
+werden). Das äußert sich dann als "Herzschlag veraltet" statt als ehrliches "kein Wert
+gefunden" – die eigentliche Ursache (falscher Präfix) wird so als reines Timing-Problem
+getarnt. Prüfe im Status-Tab das Feld "MQTT-Status-Topic-Präfix" gegen die tatsächlichen
+Loxone MQTT Virtual Input-Namen (z.B. <code>meinhostname_mqttgateway_status</code> →
+Präfix müsste <code>meinhostname/mqttgateway</code> sein) bzw. direkt per SSH:
+<code>mosquitto_sub -h localhost -t '&lt;dein-hostname&gt;/mqttgateway/#' -v -C 4</code>.</p>
 </div>
 </details>
 

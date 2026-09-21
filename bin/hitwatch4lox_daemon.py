@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.6'
+DAEMON_VERSION = '1.7'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -175,9 +175,16 @@ F4_GATEWAY_UNHEALTHY_MIN = max(0, min(60, int(get_cfg('MQTT_WATCHDOG', 'GATEWAY_
 # (pgrep -f) statt Dienstname.
 F4_GATEWAY_PATTERN      = get_cfg('MQTT_WATCHDOG', 'GATEWAY_PROCESS_PATTERN', 'mqttgateway.pl').strip()
 # Das Gateway veröffentlicht seinen eigenen Verbindungsstatus + Herzschlag direkt als MQTT-Topics
-# (z.B. loxberry/mqttgateway/status = "Connected", .../keepaliveepoch = Unix-TS) – zuverlässiger
-# als jede externe Heuristik, da es die autoritative Selbstauskunft des Gateways ist.
-F4_GATEWAY_MQTT_PREFIX  = get_cfg('MQTT_WATCHDOG', 'GATEWAY_MQTT_PREFIX', 'loxberry/mqttgateway').strip() or 'loxberry/mqttgateway'
+# unter <SYSTEM-HOSTNAME>/mqttgateway/status + .../keepaliveepoch – zuverlässiger als jede
+# externe Heuristik, da es die autoritative Selbstauskunft des Gateways ist. WICHTIG (Live-Fund):
+# der Präfix ist NICHT der literale String "loxberry", sondern hängt vom tatsächlichen
+# System-Hostnamen des jeweiligen Geräts ab (z.B. "loxberrybs/mqttgateway/..." auf einem LoxBerry
+# mit Hostname "loxberrybs") – ein früherer Default mit dem fixen Literal "loxberry/mqttgateway"
+# funktionierte nur zufällig auf Geräten deren Hostname noch "loxberry" (LoxBerry-Werkseinstellung)
+# war. Der Default wird daher jetzt dynamisch aus dem aktuellen Hostnamen abgeleitet – bleibt aber
+# wie gehabt in den Einstellungen überschreibbar, falls ein Gerät wider Erwarten abweicht.
+F4_GATEWAY_MQTT_PREFIX_DEFAULT = f'{socket.gethostname()}/mqttgateway'
+F4_GATEWAY_MQTT_PREFIX  = get_cfg('MQTT_WATCHDOG', 'GATEWAY_MQTT_PREFIX', F4_GATEWAY_MQTT_PREFIX_DEFAULT).strip() or F4_GATEWAY_MQTT_PREFIX_DEFAULT
 if F4_ENABLED and not _valid_service_name(F4_MOSQUITTO_SERVICE):
     log.warning(f'MQTT_WATCHDOG.MOSQUITTO_SERVICE ungültig ({F4_MOSQUITTO_SERVICE!r}) – Fallback "mosquitto"')
     F4_MOSQUITTO_SERVICE = 'mosquitto'
@@ -243,7 +250,8 @@ log.info(
     f'(Tage {_f3_weekdays_str} um {F3_TIME}, alle {F3_EVERY_N}x) | '
     f'F4(MQTT-Watchdog)={"an" if F4_ENABLED else "aus"} (Intervall {F4_CHECK_INTERVAL}s) '
     f'(Mosquitto={F4_MOSQUITTO_SERVICE}, Autorestart={"an" if F4_MOSQUITTO_AUTORESTART else "aus"} | '
-    f'Gateway={F4_GATEWAY_PATTERN}, Autorestart={"an" if F4_GATEWAY_AUTORESTART else "aus"}) | '
+    f'Gateway={F4_GATEWAY_PATTERN} (MQTT-Präfix {F4_GATEWAY_MQTT_PREFIX}), '
+    f'Autorestart={"an" if F4_GATEWAY_AUTORESTART else "aus"}) | '
     f'F5(System-Diagnose)={"an" if F5_ENABLED else "aus"} (Intervall {F5_CHECK_INTERVAL}s, '
     f'Disk={"an" if F5_DISK_MONITOR else "aus"} RAM={"an" if F5_MEMORY_MONITOR else "aus"} '
     f'Temp={"an" if F5_TEMP_MONITOR else "aus"} '

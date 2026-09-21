@@ -13,6 +13,12 @@ $use_lb  = ($cfg['MQTT']['USE_LOXBERRY_MQTT'] ?? '1') == '1';
 $saved   = false;
 $err     = '';
 
+// Default-Präfix für das MQTT-Gateway-Status-Topic: das Gateway veröffentlicht unter
+// <System-Hostname>/mqttgateway/... – NICHT dem fixen Literal "loxberry" (das passte nur
+// zufällig auf Geräten deren Hostname noch "loxberry" war). Identische Logik wie im
+// Python-Daemon (dort via socket.gethostname()).
+$gw_mqtt_prefix_default = (function_exists('gethostname') ? gethostname() : 'loxberry') . '/mqttgateway';
+
 // ── POST speichern ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (($_POST['csrf'] ?? '') !== hw4l_csrf()) {
@@ -52,8 +58,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pattern_re = '/^[A-Za-z0-9_.\/-]{4,128}$/';
         $gw_pattern = trim($_POST['f4_gateway_pattern'] ?? 'mqttgateway.pl');
         if (!preg_match($pattern_re, $gw_pattern)) $gw_pattern = 'mqttgateway.pl';
-        $gw_mqtt_prefix = trim($_POST['f4_gateway_mqtt_prefix'] ?? 'loxberry/mqttgateway', " \t\n\r\0\x0B/");
-        if ($gw_mqtt_prefix === '') $gw_mqtt_prefix = 'loxberry/mqttgateway';
+        $gw_mqtt_prefix = trim($_POST['f4_gateway_mqtt_prefix'] ?? $gw_mqtt_prefix_default, " \t\n\r\0\x0B/");
+        if ($gw_mqtt_prefix === '') $gw_mqtt_prefix = $gw_mqtt_prefix_default;
 
         // Funktion 5: Schwellwerte, Internet-Check-Ziel, Dienstliste (jeder Eintrag validiert
         // wie ein systemd-Dienstname – dieselbe Regel wie f4_mosquitto_service oben, da die
@@ -391,11 +397,14 @@ render_header('app_settings');
         </div>
         <div class="sl-field">
             <label for="f4_gateway_mqtt_prefix">MQTT-Gateway – Status-Topic-Präfix</label>
-            <input type="text" id="f4_gateway_mqtt_prefix" name="f4_gateway_mqtt_prefix" value="<?= cv('MQTT_WATCHDOG','GATEWAY_MQTT_PREFIX','loxberry/mqttgateway') ?>">
+            <input type="text" id="f4_gateway_mqtt_prefix" name="f4_gateway_mqtt_prefix" value="<?= cv('MQTT_WATCHDOG','GATEWAY_MQTT_PREFIX',$gw_mqtt_prefix_default) ?>">
             <p class="sl-hint">Das Gateway veröffentlicht seinen eigenen Verbindungsstatus unter
                 <code>&lt;Präfix&gt;/status</code> (z.B. "Connected") und einen Herzschlag unter
                 <code>&lt;Präfix&gt;/keepaliveepoch</code> – sichtbar in Loxone Config als MQTT
-                Virtual Input <code>loxberry_mqttgateway_status</code>. Wird für die Anzeige
+                Virtual Input z.B. <code>&lt;hostname&gt;_mqttgateway_status</code>. Standardmäßig
+                automatisch aus dem aktuellen System-Hostnamen dieses Geräts ermittelt (<b><?= h(gethostname() ?: '?') ?>/mqttgateway</b>)
+                – nur ändern falls dieses Gerät nachweislich abweicht (per <code>mosquitto_sub -h
+                localhost -t '&lt;Präfix&gt;/#' -v</code> per SSH prüfbar). Wird für die Anzeige
                 "Verbindung zu Mosquitto" im Status-Tab genutzt (rein informativ).</p>
         </div>
         <div class="sl-field">

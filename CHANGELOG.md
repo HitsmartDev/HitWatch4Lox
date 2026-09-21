@@ -5,6 +5,35 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.7] – 2026-09-21
+
+### Behoben – MQTT-Gateway-Status-Präfix war fix auf "loxberry" verdrahtet (Live-Fund, KRITISCH)
+- Auf einem zweiten Test-LoxBerry (Hostname "loxberrybs") zeigte "Verbindung zu Mosquitto"
+  dauerhaft "nicht verbunden" mit dem Log-Grund "Herzschlag veraltet", obwohl der Gateway-Prozess
+  lief und in Loxone Config aktuelle MQTT Virtual Inputs unter
+  <code>loxberrybs_mqttgateway_status</code> sichtbar waren.
+- **Root Cause:** Der bisherige Default `GATEWAY_MQTT_PREFIX=loxberry/mqttgateway` war ein fixer
+  literaler String, der nur auf dem ERSTEN Testgerät zufällig passte, weil dessen Hostname noch
+  "loxberry" (LoxBerry-Werkseinstellung) war. Tatsächlich veröffentlicht das MQTT-Gateway seinen
+  Status unter <code>&lt;System-Hostname&gt;/mqttgateway/...</code> – auf einem umbenannten Gerät
+  (hier "loxberrybs") also unter einem völlig anderen Topic.
+- **Besonders tückisch:** Der falsche Präfix lieferte trotzdem einen Wert – eine alte, retained
+  MQTT-Nachricht von einer früheren Konfiguration/einem früheren Hostnamen, die auf dem Broker
+  hängen geblieben war. Das äußerte sich als "Herzschlag veraltet" statt als ehrliches "kein
+  Wert gefunden" und tarnte damit die eigentliche Ursache (falscher Präfix) als reines
+  Timing-Problem.
+- **Fix:** `GATEWAY_MQTT_PREFIX` wird jetzt beim Daemon-Start automatisch aus dem tatsächlichen
+  System-Hostnamen ermittelt (`socket.gethostname() + '/mqttgateway'`), sowohl im Python-Daemon
+  als auch im Einstellungs-Formular (PHP `gethostname()`) – identische Logik an beiden Stellen.
+  Bleibt weiterhin überschreibbar für den seltenen Fall, dass ein Gerät abweicht. Der
+  Standard-Config kein fixer Wert mehr fest hinterlegt, damit neue Installationen automatisch
+  den richtigen, geräteindividuellen Präfix verwenden.
+- Status-Tab zeigt jetzt zusätzlich den tatsächlich verwendeten Präfix sowie den Detailtext bei
+  "nicht verbunden"/"nicht prüfbar" (vorher nur im Log sichtbar) – erleichtert künftige
+  Diagnose direkt im UI, ohne erst ins Log schauen zu müssen.
+
+---
+
 ## [1.6] – 2026-09-21
 
 ### Hinzugefügt – Mindest-Ausfalldauer vor Auto-Heal jetzt überall konsistent

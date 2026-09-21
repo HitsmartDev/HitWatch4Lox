@@ -30,6 +30,9 @@ $f4_gw_autorestart   = $f4_enabled && ($cfg['MQTT_WATCHDOG']['GATEWAY_AUTORESTAR
 $f4_gw_unhealthy_min = (int)($cfg['MQTT_WATCHDOG']['GATEWAY_UNHEALTHY_MIN'] ?? 0);
 $f4_mosq_service = $cfg['MQTT_WATCHDOG']['MOSQUITTO_SERVICE'] ?? 'mosquitto';
 $f4_gw_pattern   = $cfg['MQTT_WATCHDOG']['GATEWAY_PROCESS_PATTERN'] ?? 'mqttgateway.pl';
+// Default NICHT hardcodiert: das Gateway veröffentlicht unter <System-Hostname>/mqttgateway,
+// identische Logik wie im Python-Daemon (socket.gethostname()) und in app_settings.php.
+$f4_gw_prefix    = $cfg['MQTT_WATCHDOG']['GATEWAY_MQTT_PREFIX'] ?? ((gethostname() ?: 'loxberry') . '/mqttgateway');
 $f4_check_interval = (int)($cfg['MQTT_WATCHDOG']['CHECK_INTERVAL'] ?? 60);
 $f5_enabled = ($cfg['SYSTEM_DIAGNOSTICS']['ENABLED'] ?? '0') == '1';
 $f5_check_interval = (int)($cfg['SYSTEM_DIAGNOSTICS']['CHECK_INTERVAL'] ?? 120);
@@ -305,6 +308,7 @@ render_header('app_status');
     $g_restarts = (int)($state['gateway_restart_count'] ?? 0);
     $g_checked  = (bool)($state['gateway_broker_checked'] ?? false);
     $g_linked   = (bool)($state['gateway_broker_linked'] ?? false);
+    $g_detail   = $state['gateway_broker_detail'] ?? '';
     $f4_last_check       = $state['mqtt_watchdog_last_check'] ?? '–';
     $f4_last_check_epoch = (int)($state['mqtt_watchdog_last_check_epoch'] ?? 0);
     $f4_age      = $f4_last_check_epoch > 0 ? time() - $f4_last_check_epoch : 0;
@@ -331,8 +335,10 @@ render_header('app_status');
                 <span class="sl-info-val <?= $g_healthy ? 'ok' : 'alert' ?>"><?= h($g_active) ?><?= $g_sub ? ' / ' . h($g_sub) : '' ?></span></li>
             <li><span class="sl-info-key">Verbindung zu Mosquitto</span>
                 <span class="sl-info-val <?= $g_checked ? ($g_linked ? 'ok' : 'alert') : '' ?>">
-                    <?= $g_checked ? ($g_linked ? 'verbunden' : 'nicht verbunden') : 'nicht prüfbar' ?>
+                    <?= $g_checked ? ($g_linked ? 'verbunden' : 'nicht verbunden') : 'nicht prüfbar' ?><?php if ($g_detail): ?><br><span style="font-size:0.72rem;color:var(--muted)"><?= h($g_detail) ?></span><?php endif; ?>
                 </span></li>
+            <li><span class="sl-info-key">MQTT-Status-Topic-Präfix</span>
+                <span class="sl-info-val" style="font-size:0.82rem"><code><?= h($f4_gw_prefix) ?></code></span></li>
             <li><span class="sl-info-key">Automatischer Neustart</span>
                 <span class="sl-info-val" style="color:<?= $f4_gw_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f4_gw_autorestart, $f4_gw_unhealthy_min)) ?></span></li>
             <li><span class="sl-info-key">Neustarts gesamt</span> <span class="sl-info-val"><?= $g_restarts ?></span></li>
