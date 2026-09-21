@@ -424,11 +424,15 @@ render_header('app_status');
 ?>
         <ul class="sl-info-list">
             <li><span class="sl-info-key">🕒 Zeit-Synchronisation</span>
-                <span class="sl-info-val <?= $ts_no_ntp ? '' : ($ts === false ? 'warn' : ($ts === true ? 'ok' : '')) ?>">
-                    <?= $ts === true ? 'synchronisiert' : ($ts_no_ntp ? 'nicht zutreffend (kein NTP-Client – vermutlich Container)' : ($ts === false ? "nicht synchronisiert seit {$ts_unsynced_min} min" : 'nicht ermittelbar')) ?></span></li>
+                <span class="sl-info-val <?= $ts === false ? 'warn' : ($ts === true ? 'ok' : '') ?>">
+                    <?= $ts === true ? 'synchronisiert' : ($ts_no_ntp ? 'kein NTP-Client installiert' : ($ts === false ? "nicht synchronisiert seit {$ts_unsynced_min} min" : 'nicht ermittelbar')) ?></span></li>
             <li><span class="sl-info-key">Auto-Heal</span>
                 <span class="sl-info-val" style="color:<?= $f5_time_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f5_time_autoheal, $f5_time_unsynced_min)) ?></span></li>
         </ul>
+<?php if ($ts_no_ntp): ?>
+        <p class="sl-hint" style="margin-top:-0.3rem">Auf einem Container mit geteilter Host-Uhr unproblematisch, auf echter
+            Hardware sollte ein NTP-Client eingerichtet werden (sonst kann die Zeit über Wochen/Monate driften).</p>
+<?php endif; ?>
 <?php endif; ?>
 <?php if ($f5_services_monitor && $f5_services_list):
     $diag_services = $state['diag_services'] ?? [];

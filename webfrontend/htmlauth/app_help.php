@@ -182,13 +182,16 @@ jedem einzelnen Prüfzyklus wäre unnötig. Bleibt die Zeit dagegen wirklich dau
 unsynchronisiert (in der Praxis beobachtet: auch nach 30+ Minuten noch nicht), greift Auto-Heal
 nach Ablauf der Schwelle ein. Schlägt die Ermittlung grundsätzlich fehl (z.B.
 <code>timedatectl</code> nicht installiert), landet der genaue Grund einmalig im Log.
-<b>Live-Fund – "nicht zutreffend" statt "nicht synchronisiert":</b> Manche LoxBerry-
-Installationen (vermutlich LXC-Container auf Proxmox) haben GAR KEINEN NTP-Client
-(<code>timedatectl status</code> zeigt dort "NTP service: n/a", <code>systemd-timesyncd</code>/
-<code>chrony</code>/<code>ntp</code> sind allesamt inaktiv) – Container übernehmen die Uhrzeit
-direkt vom Host-Kernel, sie ist trotzdem korrekt. HitWatch4Lox erkennt das automatisch und zeigt
-in diesem Fall "nicht zutreffend" statt einer Warnung – kein Fehlalarm, kein unnötiger
-Auto-Heal-Versuch (ein Neustart eines nicht vorhandenen Dienstes würde ohnehin nichts bewirken).</li>
+<b>"Kein NTP-Client installiert" statt "nicht synchronisiert":</b> Manche LoxBerry-Installationen
+haben GAR KEINEN NTP-Client (<code>timedatectl status</code> zeigt dort "NTP service: n/a",
+<code>systemd-timesyncd</code>/<code>chrony</code>/<code>ntp</code> sind allesamt nicht
+vorhanden). HitWatch4Lox kann von innerhalb des Gastsystems NICHT zuverlässig unterscheiden ob
+das ein Container mit geteilter Host-Uhr ist (dort unproblematisch, die Zeit stimmt trotzdem)
+oder echte Hardware ohne eingerichtetes NTP (z.B. ein Raspberry Pi ohne RTC-Hardware – die Zeit
+kann dort über Wochen/Monate driften, ohne dass etwas sie korrigiert). Bewusste Entscheidung:
+weiterhin als Warnung anzeigen statt das fälschlich als unproblematisch anzunehmen – nur du
+kennst dein Gerät. Kein Auto-Heal-Versuch in jedem Fall (ein Neustart eines nicht vorhandenen
+Dienstes wäre wirkungslos).</li>
 <li><b>🛠️ Weitere Kern-Dienste:</b> eine frei konfigurierbare, kommagetrennte Liste zusätzlicher
 systemd-Dienste (z.B. <code>lighttpd</code>, <code>cron</code>, <code>ssh</code>) – Status wie bei
 Mosquitto in Funktion 4. <b>Auto-Heal (optional):</b> <code>systemctl restart</code> über denselben

@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.8'
+DAEMON_VERSION = '1.9'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -754,8 +754,15 @@ def compute_health(state):
     if F5_INTERNET_MONITOR and state.get('diag_internet_ok') is False:
         crit.append('Kein Internet')
 
-    if F5_TIME_MONITOR and state.get('diag_time_synced') is False and state.get('diag_time_ntp_present', True):
-        warn.append('Systemzeit nicht synchronisiert')
+    if F5_TIME_MONITOR and state.get('diag_time_synced') is False:
+        if state.get('diag_time_ntp_present', True):
+            warn.append('Systemzeit nicht synchronisiert')
+        else:
+            # Kann nicht zuverlässig zwischen "Container mit geteilter Host-Uhr" (unproblematisch)
+            # und "echte Hardware ohne eingerichtetes NTP" (Zeit kann über Wochen/Monate driften)
+            # unterschieden werden – bewusst weiterhin als Warnung sichtbar, damit der Nutzer
+            # selbst entscheidet statt dass das Plugin das fälschlich als unproblematisch annimmt.
+            warn.append('Kein NTP-Client installiert')
 
     if F5_SERVICES_MONITOR:
         for name, info in (state.get('diag_services') or {}).items():
@@ -1317,21 +1324,23 @@ def run():
                     else:
                         _time_unavailable_logged = False
                         if ts['synced'] is False and not ts.get('ntp_present', True):
-                            # Live-Fund: manche LoxBerry-Installationen (vermutlich LXC-Container
-                            # auf Proxmox) haben GAR KEINEN NTP-Client (systemd-timesyncd/chrony/
-                            # ntp allesamt inaktiv, 'timedatectl status' zeigt 'NTP service: n/a').
-                            # Container übernehmen die Uhrzeit direkt vom Host-Kernel – die Zeit
-                            # ist trotzdem korrekt, "nicht synchronisiert" ist hier KEIN echtes
-                            # Problem. Nur einmalig informativ loggen (kein WARNING/Dauerspam),
-                            # keine Ausfalldauer zählen, kein Auto-Heal (ein Neustart eines nicht
-                            # vorhandenen Dienstes würde ohnehin nichts bewirken).
+                            # Live-Fund: manche LoxBerry-Installationen haben GAR KEINEN NTP-Client
+                            # (systemd-timesyncd/chrony/ntp allesamt inaktiv/nicht installiert,
+                            # 'timedatectl status' zeigt 'NTP service: n/a'). Kann sowohl ein
+                            # Container mit geteilter Host-Uhr sein (unproblematisch) ALS AUCH
+                            # echte Hardware ohne eingerichtetes NTP (Zeit kann über Wochen/Monate
+                            # driften, z.B. Raspberry Pi ohne RTC) – von innerhalb des Gastsystems
+                            # NICHT zuverlässig unterscheidbar. Bewusst weiterhin als Warnung
+                            # sichtbar (nur einmalig geloggt, kein Dauerspam) statt das fälschlich
+                            # als unproblematisch anzunehmen. Kein Auto-Heal-Versuch (ein Neustart
+                            # eines nicht vorhandenen Dienstes wäre wirkungslos).
                             state['diag_time_unsynced_since_epoch'] = 0
                             if not _time_no_ntp_logged:
-                                log.info(
-                                    'Kein NTP-Client aktiv (systemd-timesyncd/chrony/ntp allesamt '
-                                    'inaktiv) – vermutlich Container, der die Uhrzeit vom Host '
-                                    'übernimmt. "Nicht synchronisiert" wird hier nicht als Problem '
-                                    'gewertet.'
+                                log.warning(
+                                    'Kein NTP-Client installiert (systemd-timesyncd/chrony/ntp '
+                                    'nicht vorhanden) – auf einem Container mit geteilter Host-Uhr '
+                                    'unproblematisch, auf echter Hardware sollte ein NTP-Client '
+                                    'eingerichtet werden, sonst kann die Zeit langfristig driften.'
                                 )
                                 _time_no_ntp_logged = True
                         elif ts['synced'] is False:

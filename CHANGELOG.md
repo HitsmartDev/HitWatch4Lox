@@ -5,6 +5,27 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.9] – 2026-09-21
+
+### Korrigiert – v1.8-Annahme war falsch: Gerät ist ein echter Raspberry Pi, kein Container
+- v1.8 nahm an, dass "kein NTP-Client installiert" auf einen LXC-Container mit geteilter
+  Host-Uhr hindeutet und daher unproblematisch sei (Ampel grün, keine Warnung). Der Nutzer
+  stellte klar: das betroffene Gerät ist ein **echter Raspberry Pi**, kein Container – der
+  Proxmox-VM-LoxBerry ist ein anderes, separates Gerät. Auf echter Hardware ohne eingerichteten
+  NTP-Client kann die Systemzeit über Wochen/Monate driften (kein RTC, nur `fake-hwclock`
+  rekonstruiert beim Boot eine ungefähre letzte bekannte Zeit) – das ist also ein echtes,
+  meldenswertes Konfigurationsproblem, kein Fehlalarm.
+- **Korrektur:** "Kein NTP-Client installiert" wird jetzt wieder als Warnung angezeigt (Health-
+  Ampel gelb, Log einmalig als WARNING statt INFO) statt grün/unproblematisch – da sich von
+  innerhalb des Gastsystems nicht zuverlässig zwischen Container (unproblematisch) und echter
+  Hardware (potenziell problematisch) unterscheiden lässt, wird bewusst NICHT mehr automatisch
+  angenommen dass es sich um einen Container handelt. Status-Tab zeigt "kein NTP-Client
+  installiert" mit Erklärungstext statt der vorherigen, falschen "vermutlich Container"-Annahme.
+  Weiterhin kein Auto-Heal-Versuch (ein Neustart eines nicht vorhandenen Dienstes bliebe
+  wirkungslos, das war die einzige korrekte Annahme aus v1.8).
+
+---
+
 ## [1.8] – 2026-09-21
 
 ### Behoben – Zeit-Sync meldete Fehlalarm auf Systemen ohne eigenen NTP-Client (Live-Fund)

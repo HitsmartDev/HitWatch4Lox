@@ -1,5 +1,13 @@
 ## 📌 Projekt-Status
-- **Version:** 1.8 (2026-09-21: Weiterer Live-Fund auf demselben Zweitgerät ("loxberrybs") –
+- **Version:** 1.9 (2026-09-21: KORREKTUR einer eigenen Fehlannahme aus v1.8 – dort wurde "kein
+  NTP-Client installiert" automatisch als "vermutlich Container mit geteilter Host-Uhr, daher
+  unproblematisch" eingestuft (Ampel grün). Nutzer stellte klar: das betroffene Gerät
+  ("loxberrybs") ist ein ECHTER Raspberry Pi, kein Container – der Proxmox-VM-LoxBerry ist ein
+  anderes Gerät. Auf echter Hardware ohne NTP kann die Zeit tatsächlich über Wochen/Monate
+  driften (kein RTC). Lehre: von innerhalb des Gastsystems lässt sich Container vs. physische
+  Hardware NICHT zuverlässig unterscheiden – "kein NTP-Client installiert" zeigt jetzt wieder
+  eine Warnung (gelb) statt einer stillschweigenden Grün-Annahme, mit erklärendem Hinweistext
+  statt einer festen Interpretation.)
   Zeit-Sync meldete "nicht synchronisiert" obwohl die Uhrzeit nachweislich korrekt war. Per SSH
   bestätigt: `timedatectl status` zeigt "NTP service: n/a", `systemd-timesyncd`/`chrony`/`ntp`
   allesamt inaktiv – auf diesem (vermutlich LXC-Container-) Gerät läuft GAR KEIN NTP-Client, die
@@ -292,6 +300,15 @@
   wäre wirkungslos). Status-Tab zeigt neu "nicht zutreffend (kein NTP-Client – vermutlich
   Container)" als eigenen, neutralen dritten Zustand neben "synchronisiert"/"nicht
   synchronisiert"/"nicht ermittelbar".
+  **⚠️ KORRIGIERT in v1.9:** Die "vermutlich Container"-Annahme war FALSCH – der Nutzer
+  bestätigte, dass "loxberrybs" ein echter Raspberry Pi ist, kein Container (der Proxmox-VM-
+  LoxBerry ist ein separates, anderes Gerät). Lehre: Container vs. physische Hardware lässt
+  sich von innerhalb des Gastsystems nicht zuverlässig unterscheiden – eine Automatik-Annahme
+  hier war ein Fehler. Siehe v1.9-Eintrag: "kein NTP-Client installiert" zeigt wieder eine
+  Warnung (gelb), keine stille Grün-Annahme mehr. `diag_time_ntp_present` und
+  `_any_ntp_service_installed()` bleiben als Mechanismus bestehen (die Unterscheidung "NTP
+  installiert aber gestört" vs. "NTP gar nicht installiert" ist weiterhin wertvoll für die
+  Fehlermeldung), nur die SCHLUSSFOLGERUNG ("daher unproblematisch") wurde zurückgenommen.
 - **Noch offen:**
   - [ ] Die neuen Schwellwerte (F1/F4-Mosquitto/F4-Gateway/F5-Internet/F5-Services) sind wie
     Funktion 5 insgesamt nur isoliert getestet (Funktionsebene, `_unhealthy_elapsed_min()` per
@@ -522,6 +539,11 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.9 (2026-09-21):** Korrigiert eine falsche Annahme aus v1.8 – "kein NTP-Client
+  installiert" wurde dort automatisch als "vermutlich Container, daher unproblematisch"
+  eingestuft (grün). Nutzer bestätigte, dass das betroffene Gerät ein echter Raspberry Pi ist,
+  kein Container. Zeigt jetzt wieder eine Warnung (gelb) mit Erklärungstext statt einer festen,
+  potenziell falschen Interpretation – der Nutzer entscheidet selbst pro Gerät.
 - **v1.8 (2026-09-21):** Zeit-Sync-Prüfung meldete Fehlalarm auf Systemen ohne eigenen
   NTP-Client (z.B. LXC-Container, die die Uhrzeit vom Host-Kernel übernehmen). Neue
   `_any_ntp_service_installed()`-Prüfung erkennt diesen Fall – "nicht synchronisiert" wird dann
