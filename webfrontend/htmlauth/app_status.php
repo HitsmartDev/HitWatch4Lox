@@ -17,6 +17,7 @@ $f1_enabled = ($cfg['WATCHDOG']['ENABLED'] ?? '1') == '1';
 $f2_enabled = $f1_enabled && ($cfg['REBOOT_ESCALATION']['ENABLED'] ?? '0') == '1';
 $f3_enabled = ($cfg['SCHEDULED_REBOOT']['ENABLED'] ?? '0') == '1';
 $check_interval = (int)($cfg['WATCHDOG']['CHECK_INTERVAL'] ?? 300);
+$f1_unhealthy_min = (int)($cfg['WATCHDOG']['UNHEALTHY_MIN'] ?? 0);
 $cooldown_hours  = (int)($cfg['REBOOT_ESCALATION']['COOLDOWN_HOURS'] ?? 6);
 $weekday_names = [1=>'Montag',2=>'Dienstag',3=>'Mittwoch',4=>'Donnerstag',5=>'Freitag',6=>'Samstag',7=>'Sonntag'];
 $f3_weekdays = array_filter(array_map('trim', explode(',', $cfg['SCHEDULED_REBOOT']['WEEKDAYS'] ?? '7')));
@@ -24,7 +25,9 @@ $f3_time    = $cfg['SCHEDULED_REBOOT']['TIME'] ?? '04:00';
 $f3_every_n = (int)($cfg['SCHEDULED_REBOOT']['EVERY_N'] ?? 1);
 $f4_enabled = ($cfg['MQTT_WATCHDOG']['ENABLED'] ?? '0') == '1';
 $f4_mosq_autorestart = $f4_enabled && ($cfg['MQTT_WATCHDOG']['MOSQUITTO_AUTORESTART'] ?? '1') == '1';
+$f4_mosq_unhealthy_min = (int)($cfg['MQTT_WATCHDOG']['MOSQUITTO_UNHEALTHY_MIN'] ?? 0);
 $f4_gw_autorestart   = $f4_enabled && ($cfg['MQTT_WATCHDOG']['GATEWAY_AUTORESTART'] ?? '0') == '1';
+$f4_gw_unhealthy_min = (int)($cfg['MQTT_WATCHDOG']['GATEWAY_UNHEALTHY_MIN'] ?? 0);
 $f4_mosq_service = $cfg['MQTT_WATCHDOG']['MOSQUITTO_SERVICE'] ?? 'mosquitto';
 $f4_gw_pattern   = $cfg['MQTT_WATCHDOG']['GATEWAY_PROCESS_PATTERN'] ?? 'mqttgateway.pl';
 $f4_check_interval = (int)($cfg['MQTT_WATCHDOG']['CHECK_INTERVAL'] ?? 60);
@@ -35,6 +38,7 @@ $f5_memory_monitor   = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['MEMORY_MONITO
 $f5_temp_monitor     = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['TEMP_MONITOR'] ?? '1') == '1';
 $f5_internet_monitor = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_MONITOR'] ?? '1') == '1';
 $f5_internet_autoheal= $f5_internet_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_AUTOHEAL'] ?? '0') == '1';
+$f5_internet_unhealthy_min = (int)($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_UNHEALTHY_MIN'] ?? 3);
 $f5_time_monitor     = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['TIME_MONITOR'] ?? '1') == '1';
 $f5_time_autoheal    = $f5_time_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['TIME_AUTOHEAL'] ?? '0') == '1';
 $f5_time_unsynced_min = (int)($cfg['SYSTEM_DIAGNOSTICS']['TIME_UNSYNCED_MIN'] ?? 10);
@@ -209,6 +213,9 @@ render_header('app_status');
             <li><span class="sl-info-key">Letzte Prüfung</span>
                 <span class="sl-info-val <?= $is_stale ? 'alert' : '' ?>"><?= h($last_check) ?></span></li>
             <li><span class="sl-info-key">Prüfintervall</span> <span class="sl-info-val"><?= (int)$check_interval ?> s</span></li>
+<?php if ($f1_unhealthy_min > 0): ?>
+            <li><span class="sl-info-key">Neustart erst nach</span> <span class="sl-info-val"><?= $f1_unhealthy_min ?> min</span></li>
+<?php endif; ?>
         </ul>
         <?php if ($is_stale): ?>
         <div class="sl-flash err" style="margin-top:0.6rem">
@@ -315,7 +322,7 @@ render_header('app_status');
             <li><span class="sl-info-key">TCP-Erreichbarkeit</span>
                 <span class="sl-info-val <?= $m_tcp ? 'ok' : 'alert' ?>"><?= $m_tcp ? 'erreichbar' : 'nicht erreichbar' ?></span></li>
             <li><span class="sl-info-key">Automatischer Neustart</span>
-                <span class="sl-info-val" style="color:<?= $f4_mosq_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_mosq_autorestart ? 'An' : 'Aus' ?></span></li>
+                <span class="sl-info-val" style="color:<?= $f4_mosq_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f4_mosq_autorestart, $f4_mosq_unhealthy_min)) ?></span></li>
             <li><span class="sl-info-key">Neustarts gesamt</span> <span class="sl-info-val"><?= $m_restarts ?></span></li>
         </ul>
         <div class="sl-section-title">📡 MQTT-Gateway (<?= h($f4_gw_pattern) ?>)</div>
@@ -327,7 +334,7 @@ render_header('app_status');
                     <?= $g_checked ? ($g_linked ? 'verbunden' : 'nicht verbunden') : 'nicht prüfbar' ?>
                 </span></li>
             <li><span class="sl-info-key">Automatischer Neustart</span>
-                <span class="sl-info-val" style="color:<?= $f4_gw_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_gw_autorestart ? 'An' : 'Aus' ?></span></li>
+                <span class="sl-info-val" style="color:<?= $f4_gw_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f4_gw_autorestart, $f4_gw_unhealthy_min)) ?></span></li>
             <li><span class="sl-info-key">Neustarts gesamt</span> <span class="sl-info-val"><?= $g_restarts ?></span></li>
         </ul>
         <p class="sl-hint" style="margin-top:0.5rem">Mosquitto-Dienststatus direkt von <code>systemctl show</code> (ActiveState / SubState) –
@@ -392,12 +399,14 @@ render_header('app_status');
 <?php endif; ?>
 <?php if ($f5_internet_monitor):
     $i_ok = (bool)($state['diag_internet_ok'] ?? true);
+    $i_since = (int)($state['diag_internet_unhealthy_since_epoch'] ?? 0);
+    $i_unhealthy_min = $i_since > 0 ? round((time() - $i_since) / 60) : 0;
 ?>
         <ul class="sl-info-list">
             <li><span class="sl-info-key">🌐 Internet-Erreichbarkeit</span>
-                <span class="sl-info-val <?= $i_ok ? 'ok' : 'alert' ?>"><?= $i_ok ? 'erreichbar' : 'nicht erreichbar' ?></span></li>
+                <span class="sl-info-val <?= $i_ok ? 'ok' : 'alert' ?>"><?= $i_ok ? 'erreichbar' : "nicht erreichbar seit {$i_unhealthy_min} min" ?></span></li>
             <li><span class="sl-info-key">Auto-Heal</span>
-                <span class="sl-info-val" style="color:<?= $f5_internet_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_internet_autoheal ? 'An' : 'Aus' ?></span></li>
+                <span class="sl-info-val" style="color:<?= $f5_internet_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f5_internet_autoheal, $f5_internet_unhealthy_min)) ?></span></li>
         </ul>
 <?php endif; ?>
 <?php if ($f5_time_monitor):
@@ -410,7 +419,7 @@ render_header('app_status');
                 <span class="sl-info-val <?= $ts === false ? 'warn' : ($ts === true ? 'ok' : '') ?>">
                     <?= $ts === true ? 'synchronisiert' : ($ts === false ? "nicht synchronisiert seit {$ts_unsynced_min} min" : 'nicht ermittelbar') ?></span></li>
             <li><span class="sl-info-key">Auto-Heal</span>
-                <span class="sl-info-val" style="color:<?= $f5_time_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_time_autoheal ? "An (ab {$f5_time_unsynced_min} min)" : 'Aus' ?></span></li>
+                <span class="sl-info-val" style="color:<?= $f5_time_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f5_time_autoheal, $f5_time_unsynced_min)) ?></span></li>
         </ul>
 <?php endif; ?>
 <?php if ($f5_services_monitor && $f5_services_list):

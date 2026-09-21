@@ -1,9 +1,13 @@
 [WATCHDOG]
 # Funktion 1: Netbird-Dienst-Watchdog – prüft periodisch ob Netbird tatsächlich
 # verbunden ist (nicht nur ob der Dienst läuft) und startet ihn bei Bedarf einmalig neu.
+# UNHEALTHY_MIN: Mindest-Ausfalldauer bevor neu gestartet wird (0 = sofort, bisheriges
+# Verhalten). Netbird hat kein automatisches Reconnect – ein Warten hilft grundsätzlich nicht,
+# Default bleibt daher bei 0, ist aber wie überall im Plugin konfigurierbar.
 ENABLED=1
 CHECK_INTERVAL=300
 RESTART_WAIT_SECONDS=20
+UNHEALTHY_MIN=0
 
 [REBOOT_ESCALATION]
 # Funktion 2: Nur wirksam wenn WATCHDOG.ENABLED=1. Wenn Netbird auch nach dem
@@ -33,13 +37,17 @@ EVERY_N=1
 # (pgrep -f) und über den vom Gateway selbst veröffentlichten MQTT-Status
 # (GATEWAY_MQTT_PREFIX/status + /keepaliveepoch, z.B. sichtbar als "loxberry_mqttgateway_status"
 # in Loxone Config unter MQTT Virtual Inputs).
+# *_UNHEALTHY_MIN: Mindest-Ausfalldauer bevor der jeweilige Dienst neu gestartet wird
+# (0 = sofort, bisheriges Verhalten). Konsistent mit Funktion 1/5 konfigurierbar.
 ENABLED=0
 CHECK_INTERVAL=60
 MOSQUITTO_AUTORESTART=1
+MOSQUITTO_UNHEALTHY_MIN=0
 MOSQUITTO_SERVICE=mosquitto
 MOSQUITTO_HOST=127.0.0.1
 MOSQUITTO_PORT=1883
 GATEWAY_AUTORESTART=0
+GATEWAY_UNHEALTHY_MIN=0
 GATEWAY_PROCESS_PATTERN=mqttgateway.pl
 GATEWAY_MQTT_PREFIX=loxberry/mqttgateway
 
@@ -67,6 +75,7 @@ INTERNET_MONITOR=1
 INTERNET_AUTOHEAL=0
 INTERNET_HOST=1.1.1.1
 INTERNET_PORT=53
+INTERNET_UNHEALTHY_MIN=3
 
 TIME_MONITOR=1
 TIME_AUTOHEAL=0
@@ -75,6 +84,7 @@ TIME_UNSYNCED_MIN=10
 SERVICES_MONITOR=0
 SERVICES_AUTOHEAL=0
 SERVICES_LIST=
+SERVICES_UNHEALTHY_MIN=0
 
 [MQTT]
 # Optionale Statusveröffentlichung an Loxone (Verbindungsstatus, letzte Aktionen).

@@ -5,6 +5,30 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.6] – 2026-09-21
+
+### Hinzugefügt – Mindest-Ausfalldauer vor Auto-Heal jetzt überall konsistent
+- Auf Nutzerwunsch: das in v1.5 für die Zeit-Synchronisation eingeführte Prinzip ("erst nach
+  X Minuten anhaltendem Ausfall eingreifen") gilt jetzt für JEDE Auto-Heal-Aktion im Plugin,
+  nicht nur für Zeit-Sync – Funktion 1 (Netbird), Funktion 4 (Mosquitto, Gateway – jeweils
+  einzeln) und Funktion 5 (Internet, weitere Kern-Dienste – letztere pro Dienst einzeln
+  gezählt). Jeder Schalter hat einen eigenen, in den Einstellungen konfigurierbaren
+  "Mindest-Ausfalldauer"-Wert (0–30/60 min).
+- Defaults bewusst gewählt, um bestehendes Verhalten NICHT zu ändern: Netbird, Mosquitto und
+  Gateway bleiben bei 0 min (= sofort) – diese Dienste haben kein automatisches Reconnect/
+  Self-Healing, ein Warten würde hier nur die Behebung verzögern ohne Nutzen. Internet (3 min)
+  und Zeit-Sync (10 min, seit v1.5) behalten ihre bereits sinnvollen, unveränderten
+  Nicht-Null-Defaults, da kurze Aussetzer dort die Regel und kein Ausnahmefall sind.
+  Weitere Kern-Dienste starten ebenfalls bei 0 min.
+- Gemeinsame Code-Basis (`_unhealthy_elapsed_min()`) verwaltet den "seit wann anhaltend
+  ungesund"-Zeitstempel konsistent für alle sechs Stellen – bei weiteren Kern-Diensten pro
+  Dienst einzeln (im `diag_services`-State-Dict), sonst als eigener State-Key.
+- Status-Tab zeigt bei aktivem Auto-Heal jetzt durchgängig "An (sofort)" bzw. "An (ab X min)"
+  statt nur "An"/"Aus", sowie bei Internet/Zeit-Sync zusätzlich seit wie vielen Minuten der
+  aktuelle Ausfall andauert.
+
+---
+
 ## [1.5] – 2026-09-21
 
 ### Geändert – Zeit-Sync-Auto-Heal greift erst bei anhaltendem Zustand

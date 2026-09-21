@@ -44,6 +44,10 @@ Client kann als Dienst trotzdem "aktiv" erscheinen).</p>
 ausgeführt, eine kurze Wartezeit abgewartet (Standard 20 s) und danach erneut geprüft. Kein
 Loop – pro Erkennungszyklus nur ein Versuch. Ist die Verbindung danach wieder da, ist die
 Sache erledigt; ist sie es nicht, kann optional Funktion 2 eskalieren.</p>
+<p><b>Mindest-Ausfalldauer vor Neustart:</b> Standard 0 min = sofort beim ersten fehlgeschlagenen
+Check. Netbird hat kein automatisches Reconnect (siehe oben) – ein Warten würde hier grundsätzlich
+nicht helfen, daher bleibt der Default bewusst bei "sofort". Die Schwelle ist trotzdem wie überall
+im Plugin konfigurierbar, falls du bewusst kurze Aussetzer tolerieren möchtest.</p>
 </div>
 </details>
 
@@ -88,7 +92,9 @@ Funktion 1, da ein MQTT-Ausfall schneller auffallen soll). Die Status-Anzeige ze
 an, wann zuletzt geprüft wurde. Sie ist <b>nicht einzeln abschaltbar</b> – sobald Funktion 4 aktiv ist, siehst du
 immer den Zustand beider Dienste. Separat schaltbar ist nur, ob ein ungesunder Dienst
 <b>automatisch neu gestartet</b> wird (gleiches Prinzip wie Funktion 1, nur für MQTT statt
-Netbird – ein Versuch pro Erkennungszyklus, kein Cooldown/Reboot-Eskalation nötig).</p>
+Netbird – ein Versuch pro Erkennungszyklus, kein Cooldown/Reboot-Eskalation nötig). Für Mosquitto
+und Gateway jeweils getrennt einstellbar: <b>Mindest-Ausfalldauer vor Neustart</b> (Standard 0 min
+= sofort, wie bei Funktion 1 konfigurierbar falls du kurze Aussetzer tolerieren willst).</p>
 <p><b>Mosquitto-Broker:</b> läuft als regulärer systemd-Dienst. Prüft sowohl den
 Dienststatus (<code>systemctl show</code>, ActiveState/SubState) als auch eine echte
 TCP-Verbindung zum konfigurierten Broker-Port. Ein Prozess, der laut systemd noch "aktiv" ist
@@ -147,7 +153,9 @@ einmalig im Log. Kein Auto-Heal.</li>
 1.1.1.1:53) – bewusst <b>getrennt</b> von der Netbird-Prüfung (Funktion 1), damit man
 unterscheiden kann ob beim Kunden das Internet weg ist oder nur Netbird selbst ein Problem hat.
 <b>Auto-Heal (optional):</b> startet den Netzwerk-Dienst (<code>dhcpcd</code> bzw.
-<code>networking</code>) neu – kein Interface-Down/Up-Gebastel.</li>
+<code>networking</code>) neu – kein Interface-Down/Up-Gebastel. Erst nach einer einstellbaren
+Mindest-Ausfalldauer (Standard 3 min), da kurze Aussetzer (z.B. ein DHCP-Renew) sich oft von
+selbst lösen, bevor der Netzwerk-Dienst neu gestartet werden müsste.</li>
 <li><b>🕒 Zeit-Synchronisation:</b> fragt <code>timedatectl</code> ob die Systemzeit aktuell
 NTP-synchronisiert ist (keine eigene NTP-Abfrage nötig, nutzt systemds eigene Bewertung).
 Relevant u.a. für Funktion 3 (zeitgesteuerter Reboot) und TLS-Zertifikate. <b>Auto-Heal
@@ -163,8 +171,16 @@ nach Ablauf der Schwelle ein. Schlägt die Ermittlung grundsätzlich fehl (z.B.
 <li><b>🛠️ Weitere Kern-Dienste:</b> eine frei konfigurierbare, kommagetrennte Liste zusätzlicher
 systemd-Dienste (z.B. <code>lighttpd</code>, <code>cron</code>, <code>ssh</code>) – Status wie bei
 Mosquitto in Funktion 4. <b>Auto-Heal (optional):</b> <code>systemctl restart</code> über denselben
-validierten Root-Helper.</li>
+validierten Root-Helper, mit eigener Mindest-Ausfalldauer (Standard 0 min = sofort) – jeder Dienst
+in der Liste zählt dabei unabhängig, mit eigenem Zähler seit wann er ungesund ist.</li>
 </ul>
+<p class="sl-hint"><b>Mindest-Ausfalldauer vor Neustart – konsistent für alle Auto-Heal-Aktionen im
+Plugin</b> (Funktion 1 Netbird, Funktion 4 Mosquitto/Gateway, Funktion 5 Internet/Zeit-Sync/weitere
+Dienste): jeder Auto-Heal-Schalter hat einen eigenen, einstellbaren "erst nach X Minuten
+eingreifen"-Wert. Default ist überall 0 = sofort (unverändertes Verhalten), <b>außer</b> bei
+Internet (3 min) und Zeit-Sync (10 min) – dort ist ein kurzer, selbstheilender Aussetzer die
+Regel, kein Ausnahmefall. Wird die Schwelle unterschritten, wird das Problem trotzdem angezeigt
+und geloggt ("wartet noch"), nur der Neustart selbst wird zurückgehalten.</p>
 <p class="sl-hint">Bewusste Grenze: Auto-Heal beschränkt sich überall auf Dienst-/Netzwerk-Neustarts.
 Ein automatisches Remounten eines schreibgeschützten Root-Dateisystems (klassisches
 SD-Karten-Sterbesymptom) ist <b>nicht</b> automatisiert – das kaschiert oft nur eine sterbende

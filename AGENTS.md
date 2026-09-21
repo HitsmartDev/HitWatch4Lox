@@ -1,11 +1,10 @@
 ## 📌 Projekt-Status
-- **Version:** 1.5 (2026-09-21: Nutzer-Feedback nach Live-Betrieb – Auto-Heal für Zeit-Sync griff
-  bei JEDEM Prüfzyklus sobald `NTPSynchronized=no`, auch bei kurzen harmlosen Ausschlägen aus
-  denen sich `systemd-timesyncd` von selbst erholt (der Dienst synchronisiert von sich aus
-  periodisch neu). Gleichzeitig gab es beim Nutzer aber auch reale Fälle mit 30+ Minuten
-  andauernder Nicht-Synchronisation, wo Auto-Heal durchaus sinnvoll ist. Neuer Schwellwert
-  `TIME_UNSYNCED_MIN` (Standard 10 min, einstellbar) – Auto-Heal greift erst wenn der Zustand
-  DURCHGEHEND länger anhält, nicht bei jedem einzelnen Blip.)
+- **Version:** 1.6 (2026-09-21: Der Nutzer wollte das "Mindest-Ausfalldauer vor Eingriff"-Prinzip
+  aus v1.5 (bisher nur Zeit-Sync) explizit auf ALLE Auto-Heal-Stellen im Plugin ausgeweitet
+  wissen ("das sollte sich überall durchziehen") – jetzt konfigurierbar für Funktion 1 (Netbird),
+  Funktion 4 (Mosquitto, Gateway) und Funktion 5 (Internet, weitere Kerndienste). Defaults
+  bewusst so gewählt, dass sich am bisherigen Verhalten NICHTS ändert (0 min = sofort) außer bei
+  Internet (3 min) und Zeit-Sync (10 min), wo kurze Selbstheilung die Regel ist.)
   Basiert auf v1.2 (2026-09-20): Live-Test von v1.1 zeigte einen Regressions-Bug –
   `mqtt_publish_status()` gab bei JEDER Veröffentlichung einen TypeError, weil
   `publish.multiple()` anders als `publish.single()` kein globales `qos`-Argument kennt.
@@ -210,7 +209,34 @@
   jedem folgenden Zyklus sofort erneut ausgelöst wird). Dieselbe Überlegung (Internet-Auto-Heal
   greift ebenfalls sofort bei jedem Zyklus) wurde dem Nutzer als mögliche Erweiterung genannt,
   aber NICHT umgesetzt – nur auf explizite Anfrage.
+- **v1.6 – Mindest-Ausfalldauer überall konsistent (auf expliziten Nutzerwunsch):** Nach der
+  Zeit-Sync-Diskussion (v1.5) fragte der Nutzer, ob "wie lange ist ein Netzwerkausfall okay bis
+  Neustart eingeleitet wird" nicht überall definierbar sein sollte, nicht nur bei Zeit-Sync.
+  Umsetzung:
+  1. Neue gemeinsame Helper-Funktion `_unhealthy_elapsed_min(state, key, unhealthy, now)` –
+     verwaltet einen "seit wann anhaltend ungesund"-Zeitstempel generisch, ersetzt die
+     Zeit-Sync-spezifische Inline-Logik aus v1.5 konzeptionell (Zeit-Sync-Code selbst NICHT
+     angefasst, um die frisch getestete v1.5-Logik nicht zu riskieren – nur alle NEUEN Stellen
+     nutzen den Helper).
+  2. Angewandt auf: Netbird-Neustart (F1, `netbird_unhealthy_since_epoch`), Mosquitto-Neustart
+     (F4, `mosquitto_unhealthy_since_epoch`), Gateway-Neustart (F4,
+     `gateway_unhealthy_since_epoch`), Internet-Neustart (F5,
+     `diag_internet_unhealthy_since_epoch`), weitere Kerndienste (F5, PRO Dienst ein eigener
+     `unhealthy_since_epoch` im jeweiligen `diag_services[svc]`-Dict statt eines globalen Keys).
+  3. **Bewusste Default-Entscheidung, kein blindes "überall X Minuten":** Netbird/Mosquitto/
+     Gateway/weitere-Dienste bleiben bei 0 min (=sofort) – diese Dienste haben KEIN
+     automatisches Reconnect/Self-Healing (anders als `systemd-timesyncd`), ein Warten würde
+     hier nur verzögern ohne Nutzen zu bringen (explizit im Code-Kommentar UND in der
+     Hilfe-Seite dokumentiert, damit das bei zukünftigen Änderungen nicht vergessen wird).
+     Internet (3 min, neu) bekommt einen Nicht-Null-Default weil kurze DHCP-/ISP-Blips dort
+     ebenso häufig sind wie bei Zeit-Sync.
+  4. UI: neuer `hw4l_autoheal_label()`-Helper in `common.php` für die konsistente Anzeige
+     "Aus"/"An (sofort)"/"An (ab X min)" statt bisher nur "An"/"Aus" – ersetzt die vorher
+     Zeit-Sync-spezifische Inline-Logik in `app_status.php`.
 - **Noch offen:**
+  - [ ] Die neuen Schwellwerte (F1/F4-Mosquitto/F4-Gateway/F5-Internet/F5-Services) sind wie
+    Funktion 5 insgesamt nur isoliert getestet (Funktionsebene, `_unhealthy_elapsed_min()` per
+    Smoke-Test verifiziert), nicht auf einem echten LoxBerry über mehrere Zyklen hinweg.
   - [ ] Funktion 5 (alle sechs Sub-Checks + Auto-Heal-Aktionen), die Health-Ampel und das
     Event-Topic sind mangels Linux-Testumgebung nur isoliert (Funktionsebene, simulierter State)
     getestet worden, nicht vollständig auf einem echten LoxBerry. Live-Test bestätigte bereits
@@ -360,6 +386,12 @@
 - `diag_time_synced`, `diag_time_restart_count`, `diag_time_last_restart(_epoch)`
 - `diag_time_unsynced_since_epoch` (seit v1.5, 0 wenn synchron oder nicht beurteilbar – Basis
   für die Persistenz-Schwelle `TIME_UNSYNCED_MIN`)
+- `netbird_unhealthy_since_epoch`, `mosquitto_unhealthy_since_epoch`,
+  `gateway_unhealthy_since_epoch`, `diag_internet_unhealthy_since_epoch` (seit v1.6, jeweils 0
+  wenn gesund – Basis für die jeweilige `*_UNHEALTHY_MIN`-Schwelle, verwaltet von
+  `_unhealthy_elapsed_min()`)
+- `diag_services[svc].unhealthy_since_epoch` (seit v1.6, PRO Dienst statt global – jeder
+  überwachte Dienst aus `SERVICES_LIST` zählt unabhängig seit wann er ungesund ist)
 - `diag_services` (Dict, Key = Dienstname, Value = `{active_state, sub_state, healthy,
   restart_count, last_restart, last_restart_epoch}` – persistiert Zähler über Zyklen hinweg)
 - `action_log` (Liste, max. 200 Einträge, neueste am Ende – `{epoch, time, action, success,
@@ -428,6 +460,11 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.6 (2026-09-21):** Mindest-Ausfalldauer vor Auto-Heal (bisher nur Zeit-Sync, v1.5) jetzt
+  konsistent für ALLE Auto-Heal-Aktionen konfigurierbar: Netbird (F1), Mosquitto + Gateway (F4),
+  Internet + weitere Kerndienste (F5, letztere pro Dienst einzeln). Defaults bei 0 min (=sofort,
+  unverändertes Verhalten) außer Internet (3 min) – neue gemeinsame Helper-Funktion
+  `_unhealthy_elapsed_min()`, neues `hw4l_autoheal_label()` für konsistente Status-Anzeige.
 - **v1.5 (2026-09-21):** Auto-Heal für Zeit-Synchronisation greift nicht mehr bei jedem
   einzelnen Prüfzyklus, sondern erst wenn der unsynchronisierte Zustand DURCHGEHEND länger als
   eine einstellbare Schwelle anhält (Standard 10 min, `TIME_UNSYNCED_MIN`) – vermeidet unnötige

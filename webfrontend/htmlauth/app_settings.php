@@ -89,7 +89,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $c  = "[WATCHDOG]\n";
         $c .= "ENABLED={$f1_en}\n";
         $c .= 'CHECK_INTERVAL='       . max(60, min(3600, intval($_POST['check_interval']       ?? 300))) . "\n";
-        $c .= 'RESTART_WAIT_SECONDS=' . max(5,  min(120,  intval($_POST['restart_wait_seconds'] ?? 20)))  . "\n\n";
+        $c .= 'RESTART_WAIT_SECONDS=' . max(5,  min(120,  intval($_POST['restart_wait_seconds'] ?? 20)))  . "\n";
+        $c .= 'UNHEALTHY_MIN='        . max(0,  min(60,   intval($_POST['f1_unhealthy_min']     ?? 0)))   . "\n\n";
 
         $c .= "[REBOOT_ESCALATION]\n";
         $c .= "ENABLED={$f2_en}\n";
@@ -105,10 +106,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $c .= "ENABLED={$f4_en}\n";
         $c .= 'CHECK_INTERVAL=' . max(15, min(900, intval($_POST['f4_check_interval'] ?? 60))) . "\n";
         $c .= "MOSQUITTO_AUTORESTART={$f4_mosq_auto}\n";
+        $c .= 'MOSQUITTO_UNHEALTHY_MIN=' . max(0, min(60, intval($_POST['f4_mosquitto_unhealthy_min'] ?? 0))) . "\n";
         $c .= "MOSQUITTO_SERVICE={$mosq_service}\n";
         $c .= "MOSQUITTO_HOST={$mosq_host}\n";
         $c .= "MOSQUITTO_PORT={$mosq_port}\n";
         $c .= "GATEWAY_AUTORESTART={$f4_gw_auto}\n";
+        $c .= 'GATEWAY_UNHEALTHY_MIN=' . max(0, min(60, intval($_POST['f4_gateway_unhealthy_min'] ?? 0))) . "\n";
         $c .= "GATEWAY_PROCESS_PATTERN={$gw_pattern}\n";
         $c .= "GATEWAY_MQTT_PREFIX={$gw_mqtt_prefix}\n\n";
 
@@ -127,12 +130,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $c .= "INTERNET_AUTOHEAL={$f5_inet_heal}\n";
         $c .= "INTERNET_HOST={$f5_inet_host}\n";
         $c .= "INTERNET_PORT={$f5_inet_port}\n";
+        $c .= 'INTERNET_UNHEALTHY_MIN=' . max(0, min(60, intval($_POST['f5_internet_unhealthy_min'] ?? 3))) . "\n";
         $c .= "TIME_MONITOR={$f5_time_mon}\n";
         $c .= "TIME_AUTOHEAL={$f5_time_heal}\n";
         $c .= 'TIME_UNSYNCED_MIN=' . max(1, min(180, intval($_POST['f5_time_unsynced_min'] ?? 10))) . "\n";
         $c .= "SERVICES_MONITOR={$f5_svc_mon}\n";
         $c .= "SERVICES_AUTOHEAL={$f5_svc_heal}\n";
-        $c .= "SERVICES_LIST={$f5_svc_list_str}\n\n";
+        $c .= "SERVICES_LIST={$f5_svc_list_str}\n";
+        $c .= 'SERVICES_UNHEALTHY_MIN=' . max(0, min(60, intval($_POST['f5_services_unhealthy_min'] ?? 0))) . "\n\n";
 
         $c .= "[MQTT]\n";
         $c .= "ENABLED={$mqtt_en}\n";
@@ -220,6 +225,15 @@ render_header('app_settings');
                    value="<?= cv('WATCHDOG','RESTART_WAIT_SECONDS','20') ?>"
                    oninput="document.getElementById('srw').textContent=this.value">
             <p class="sl-hint">Wie lange nach <code>systemctl restart netbird</code> gewartet wird, bevor der Status erneut geprüft wird.</p>
+        </div>
+        <div class="sl-slider-row">
+            <label>Erst neu starten wenn durchgehend nicht verbunden seit <span class="sl-slider-val" id="sf1um"><?= cv('WATCHDOG','UNHEALTHY_MIN','0') ?></span> min</label>
+            <input type="range" name="f1_unhealthy_min" min="0" max="30" step="1"
+                   value="<?= cv('WATCHDOG','UNHEALTHY_MIN','0') ?>"
+                   oninput="document.getElementById('sf1um').textContent=this.value">
+            <p class="sl-hint">Standard 0 = sofort beim ersten fehlgeschlagenen Check (Netbird hat kein
+                automatisches Reconnect – ein Warten hilft hier meist nicht). Nur erhöhen wenn du bewusst
+                kurze Aussetzer tolerieren willst, bevor der Dienst neu gestartet wird.</p>
         </div>
     </div>
 </div>
@@ -360,6 +374,12 @@ render_header('app_settings');
                 zum Broker-Port – ein hängender Prozess, der zwar noch "aktiv" gemeldet wird aber keine
                 Verbindungen mehr annimmt, wird so trotzdem erkannt. Ist dieser Schalter aus, wird
                 nur der Status angezeigt, aber nichts automatisch neu gestartet.</p>
+            <div class="sl-slider-row">
+                <label>Erst neu starten wenn durchgehend ungesund seit <span class="sl-slider-val" id="sf4mu"><?= cv('MQTT_WATCHDOG','MOSQUITTO_UNHEALTHY_MIN','0') ?></span> min</label>
+                <input type="range" name="f4_mosquitto_unhealthy_min" min="0" max="30" step="1"
+                       value="<?= cv('MQTT_WATCHDOG','MOSQUITTO_UNHEALTHY_MIN','0') ?>"
+                       oninput="document.getElementById('sf4mu').textContent=this.value">
+            </div>
         </div>
         <hr>
         <div class="sl-field">
@@ -390,6 +410,12 @@ render_header('app_settings');
                 Bedarf, startet ihn aber bewusst NICHT selbst neu – das übernimmt LoxBerrys
                 eigenes Watchdog-System für seine Kern-Daemons. Der Erfolg wird nach kurzer
                 Wartezeit erneut geprüft.</p>
+            <div class="sl-slider-row">
+                <label>Erst eingreifen wenn durchgehend ungesund seit <span class="sl-slider-val" id="sf4gu"><?= cv('MQTT_WATCHDOG','GATEWAY_UNHEALTHY_MIN','0') ?></span> min</label>
+                <input type="range" name="f4_gateway_unhealthy_min" min="0" max="30" step="1"
+                       value="<?= cv('MQTT_WATCHDOG','GATEWAY_UNHEALTHY_MIN','0') ?>"
+                       oninput="document.getElementById('sf4gu').textContent=this.value">
+            </div>
         </div>
     </div>
 </div>
@@ -509,9 +535,16 @@ render_header('app_settings');
                 <label for="f5_internet_port">Prüfziel Port</label>
                 <input type="number" id="f5_internet_port" name="f5_internet_port" value="<?= cv('SYSTEM_DIAGNOSTICS','INTERNET_PORT','53') ?>">
             </div>
+            <div class="sl-slider-row">
+                <label>Erst neu starten wenn durchgehend nicht erreichbar seit <span class="sl-slider-val" id="sf5iu"><?= cv('SYSTEM_DIAGNOSTICS','INTERNET_UNHEALTHY_MIN','3') ?></span> min</label>
+                <input type="range" name="f5_internet_unhealthy_min" min="0" max="30" step="1"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','INTERNET_UNHEALTHY_MIN','3') ?>"
+                       oninput="document.getElementById('sf5iu').textContent=this.value">
+            </div>
             <p class="sl-hint">Getrennt von der Netbird-Prüfung (Funktion 1) – unterscheidet "Kunde hat kein
                 Internet" von "Netbird selbst hat ein Problem". Auto-Heal startet den Netzwerk-Dienst
-                (dhcpcd/networking) neu, kein Interface-Down/Up.</p>
+                (dhcpcd/networking) neu, kein Interface-Down/Up. Ein kurzer Ausfall (z.B. DHCP-Renew) löst
+                sich meist von selbst – Standard 3 min Mindest-Ausfalldauer vor einem Eingriff.</p>
         </div>
         <hr>
         <div class="sl-field">
@@ -561,6 +594,13 @@ render_header('app_settings');
                 <label for="f5_services_list">Dienstnamen (systemd, kommagetrennt)</label>
                 <input type="text" id="f5_services_list" name="f5_services_list"
                        value="<?= cv('SYSTEM_DIAGNOSTICS','SERVICES_LIST','') ?>" placeholder="z.B. lighttpd,cron,ssh">
+            </div>
+            <div class="sl-slider-row">
+                <label>Erst neu starten wenn durchgehend nicht aktiv seit <span class="sl-slider-val" id="sf5su"><?= cv('SYSTEM_DIAGNOSTICS','SERVICES_UNHEALTHY_MIN','0') ?></span> min</label>
+                <input type="range" name="f5_services_unhealthy_min" min="0" max="30" step="1"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','SERVICES_UNHEALTHY_MIN','0') ?>"
+                       oninput="document.getElementById('sf5su').textContent=this.value">
+                <p class="sl-hint">Gilt für jeden Dienst in der Liste einzeln mit eigenem Zähler.</p>
             </div>
             <p class="sl-hint">Zusätzlich zu Netbird (Funktion 1) und Mosquitto (Funktion 4) – z.B. weitere
                 LoxBerry-Kerndienste. Nutze <code>systemctl list-units --type=service</code> per SSH um die

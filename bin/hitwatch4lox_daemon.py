@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.5'
+DAEMON_VERSION = '1.6'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -112,6 +112,10 @@ def get_cfg(section, key, default=''):
 F1_ENABLED       = get_cfg('WATCHDOG', 'ENABLED', '1') == '1'
 CHECK_INTERVAL   = max(60, min(3600, int(get_cfg('WATCHDOG', 'CHECK_INTERVAL', '300'))))
 RESTART_WAIT     = max(5, min(120, int(get_cfg('WATCHDOG', 'RESTART_WAIT_SECONDS', '20'))))
+# Mindest-Ausfalldauer bevor der Dienst-Neustart ausgelöst wird (0 = sofort, bisheriges
+# Verhalten). Netbird hat kein automatisches Reconnect – ein Warten hilft hier grundsätzlich
+# nicht (siehe app_help.php), Default bleibt daher bei 0, ist aber wie überall konfigurierbar.
+F1_UNHEALTHY_MIN = max(0, min(60, int(get_cfg('WATCHDOG', 'UNHEALTHY_MIN', '0'))))
 
 F2_ENABLED       = F1_ENABLED and get_cfg('REBOOT_ESCALATION', 'ENABLED', '0') == '1'
 COOLDOWN_HOURS   = max(1, min(72, int(get_cfg('REBOOT_ESCALATION', 'COOLDOWN_HOURS', '6'))))
@@ -159,10 +163,12 @@ F4_ENABLED              = get_cfg('MQTT_WATCHDOG', 'ENABLED', '0') == '1'
 # nach dem kürzesten aktiven Intervall, jede Funktion prüft selbst ob SIE fällig ist.
 F4_CHECK_INTERVAL       = max(15, min(3600, int(get_cfg('MQTT_WATCHDOG', 'CHECK_INTERVAL', '60'))))
 F4_MOSQUITTO_AUTORESTART = F4_ENABLED and get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_AUTORESTART', '1') == '1'
+F4_MOSQUITTO_UNHEALTHY_MIN = max(0, min(60, int(get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_UNHEALTHY_MIN', '0'))))
 F4_MOSQUITTO_SERVICE    = get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_SERVICE', 'mosquitto').strip()
 F4_MOSQUITTO_HOST       = get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_HOST', '127.0.0.1').strip() or '127.0.0.1'
 F4_MOSQUITTO_PORT       = int(get_cfg('MQTT_WATCHDOG', 'MOSQUITTO_PORT', '1883') or '1883')
 F4_GATEWAY_AUTORESTART  = F4_ENABLED and get_cfg('MQTT_WATCHDOG', 'GATEWAY_AUTORESTART', '0') == '1'
+F4_GATEWAY_UNHEALTHY_MIN = max(0, min(60, int(get_cfg('MQTT_WATCHDOG', 'GATEWAY_UNHEALTHY_MIN', '0'))))
 # Das LoxBerry MQTT-Gateway (mqttgateway.pl) ist KEIN systemd-Dienst, sondern ein klassischer
 # Perl-Kern-Daemon (bestätigt per 'systemctl list-units' – dort taucht nur mosquitto.service auf,
 # 'pgrep -fa mqtt' zeigt aber den laufenden Prozess). Erkennung daher über Prozess-Suchmuster
@@ -201,6 +207,9 @@ F5_INTERNET_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_MO
 F5_INTERNET_AUTOHEAL = F5_INTERNET_MONITOR and get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_AUTOHEAL', '0') == '1'
 F5_INTERNET_HOST     = get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_HOST', '1.1.1.1').strip() or '1.1.1.1'
 F5_INTERNET_PORT     = int(get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_PORT', '53') or '53')
+# Netzwerk-Blips (kurzer DHCP-Hänger, kurzer ISP-Aussetzer) lösen sich oft von selbst –
+# Standard 3 min Mindest-Ausfalldauer vor einem Netzwerk-Neustart, konfigurierbar.
+F5_INTERNET_UNHEALTHY_MIN = max(0, min(60, int(get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_UNHEALTHY_MIN', '3'))))
 
 F5_TIME_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_MONITOR', '1') == '1'
 F5_TIME_AUTOHEAL = F5_TIME_MONITOR and get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_AUTOHEAL', '0') == '1'
@@ -211,6 +220,7 @@ F5_TIME_UNSYNCED_MIN = max(1, min(180, int(get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_U
 
 F5_SERVICES_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_MONITOR', '0') == '1'
 F5_SERVICES_AUTOHEAL = F5_SERVICES_MONITOR and get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_AUTOHEAL', '0') == '1'
+F5_SERVICES_UNHEALTHY_MIN = max(0, min(60, int(get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_UNHEALTHY_MIN', '0'))))
 _F5_SERVICES_RAW = get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_LIST', '')
 F5_SERVICES_LIST = [s.strip() for s in _F5_SERVICES_RAW.split(',') if s.strip() and _valid_service_name(s.strip())]
 
@@ -789,6 +799,24 @@ def cooldown_remaining_seconds(state):
     return max(0, remaining)
 
 # ---------------------------------------------------------------------------
+# Mindest-Ausfalldauer vor Auto-Heal: gemeinsame Basis für Funktion 1/4/5. Verwaltet einen
+# 'seit wann anhaltend ungesund'-Zeitstempel in state[key]. Bei unhealthy=False wird der
+# Zeitstempel zurückgesetzt (Zustand wieder gesund) und 0.0 zurückgegeben. Standardwert für
+# alle neuen Schwellen ist 0 Minuten (= sofort) – identisch zum bisherigen, ungebremsten
+# Verhalten, damit sich für bestehende Installationen nichts ändert, sofern der Nutzer nicht
+# selbst eine Wartezeit einstellt.
+# ---------------------------------------------------------------------------
+def _unhealthy_elapsed_min(state, key, unhealthy, now):
+    if not unhealthy:
+        state[key] = 0
+        return 0.0
+    since = state.get(key) or 0
+    if since <= 0:
+        since = now
+        state[key] = since
+    return (now - since) / 60
+
+# ---------------------------------------------------------------------------
 # MQTT – rein informative Statusveröffentlichung, one-shot pro Zyklus.
 # Bewusst KEINE dauerhafte Verbindung: der Watchdog läuft nur alle paar Minuten,
 # eine Kurzverbindung pro Zyklus (connect → publish → disconnect) vermeidet die
@@ -971,44 +999,60 @@ def run():
                     state['status'] = f"Netbird-Statusabfrage fehlgeschlagen: {result['error']}"
                     log.error(state['status'])
 
+                netbird_unhealthy_min = _unhealthy_elapsed_min(
+                    state, 'netbird_unhealthy_since_epoch', not result['connected'], now
+                )
                 if not result['connected']:
-                    if _prev_connected is not False:
+                    if netbird_unhealthy_min < F1_UNHEALTHY_MIN:
                         log.warning(
                             f"Netbird nicht verbunden (Management={result['management']}, "
-                            f"Signal={result['signal']}) – starte Dienst neu..."
+                            f"Signal={result['signal']}) – seit {netbird_unhealthy_min:.0f} min, "
+                            f'warte auf Mindest-Ausfalldauer ({F1_UNHEALTHY_MIN} min) vor Neustart'
                         )
-                    ok = restart_netbird()
-                    state['last_restart_epoch']   = now
-                    state['last_restart']         = fmt(now)
-                    state['restart_count_total']  = int(state.get('restart_count_total', 0) or 0) + (1 if ok else 0)
-                    log_action(state, 'netbird_restart', success=ok)
-
-                    time.sleep(RESTART_WAIT)
-                    result2 = check_netbird()
-                    state['netbird_connected']  = result2['connected']
-                    state['netbird_management'] = result2['management']
-                    state['netbird_signal']     = result2['signal']
-
-                    if result2['connected']:
-                        log.info('Netbird nach Dienst-Neustart wieder verbunden')
+                        _prev_connected = False
                     else:
-                        log.error(
-                            f"Netbird nach Dienst-Neustart weiterhin nicht verbunden "
-                            f"(Management={result2['management']}, Signal={result2['signal']})"
-                        )
-                        if F2_ENABLED:
-                            remaining = cooldown_remaining_seconds(state)
-                            if remaining > 0:
-                                log.warning(
-                                    f'Reboot unterdrückt – Cooldown aktiv, noch {remaining/3600:.1f}h '
-                                    f"(letzter Auto-Reboot: {state.get('last_auto_reboot', '–')}, "
-                                    f'Grund: {state.get("last_auto_reboot_reason", "–")})'
-                                )
-                            else:
-                                trigger_reboot('netbird_watchdog', state)
-                                save_state(state)
-                                return  # System fährt herunter – Prozess muss hier nicht weiterlaufen
-                    _prev_connected = result2['connected']
+                        if _prev_connected is not False:
+                            log.warning(
+                                f"Netbird nicht verbunden (Management={result['management']}, "
+                                f"Signal={result['signal']}) – starte Dienst neu..."
+                            )
+                        ok = restart_netbird()
+                        state['last_restart_epoch']   = now
+                        state['last_restart']         = fmt(now)
+                        state['restart_count_total']  = int(state.get('restart_count_total', 0) or 0) + (1 if ok else 0)
+                        log_action(state, 'netbird_restart', success=ok)
+                        # Fenster neu starten statt bei jedem weiteren Zyklus sofort wieder
+                        # einzugreifen – gibt dem Neustart Zeit zu wirken (nur relevant bei
+                        # F1_UNHEALTHY_MIN > 0, Standard 0 restartet weiterhin sofort).
+                        state['netbird_unhealthy_since_epoch'] = now
+
+                        time.sleep(RESTART_WAIT)
+                        result2 = check_netbird()
+                        state['netbird_connected']  = result2['connected']
+                        state['netbird_management'] = result2['management']
+                        state['netbird_signal']     = result2['signal']
+
+                        if result2['connected']:
+                            log.info('Netbird nach Dienst-Neustart wieder verbunden')
+                            state['netbird_unhealthy_since_epoch'] = 0
+                        else:
+                            log.error(
+                                f"Netbird nach Dienst-Neustart weiterhin nicht verbunden "
+                                f"(Management={result2['management']}, Signal={result2['signal']})"
+                            )
+                            if F2_ENABLED:
+                                remaining = cooldown_remaining_seconds(state)
+                                if remaining > 0:
+                                    log.warning(
+                                        f'Reboot unterdrückt – Cooldown aktiv, noch {remaining/3600:.1f}h '
+                                        f"(letzter Auto-Reboot: {state.get('last_auto_reboot', '–')}, "
+                                        f'Grund: {state.get("last_auto_reboot_reason", "–")})'
+                                    )
+                                else:
+                                    trigger_reboot('netbird_watchdog', state)
+                                    save_state(state)
+                                    return  # System fährt herunter – Prozess muss hier nicht weiterlaufen
+                        _prev_connected = result2['connected']
                 else:
                     if _prev_connected is False:
                         log.info('Netbird wieder verbunden')
@@ -1077,19 +1121,26 @@ def run():
                 state['mosquitto_sub_state']    = m['sub_state']
                 state['mosquitto_tcp_ok']       = tcp_ok
                 state['mosquitto_healthy']      = mosq_healthy
+                mosq_unhealthy_min = _unhealthy_elapsed_min(
+                    state, 'mosquitto_unhealthy_since_epoch', not mosq_healthy, now
+                )
                 if not mosq_healthy:
+                    waiting = F4_MOSQUITTO_AUTORESTART and mosq_unhealthy_min < F4_MOSQUITTO_UNHEALTHY_MIN
                     log.warning(
                         f"Mosquitto ({F4_MOSQUITTO_SERVICE}) nicht gesund – Status: "
                         f"{m['active_state']}/{m['sub_state']}, TCP {F4_MOSQUITTO_HOST}:{F4_MOSQUITTO_PORT} "
                         f"{'erreichbar' if tcp_ok else 'NICHT erreichbar'}"
-                        + (' – starte Dienst neu...' if F4_MOSQUITTO_AUTORESTART else ' – Autorestart deaktiviert, kein Neustart.')
+                        + (f' – seit {mosq_unhealthy_min:.0f} min, warte auf Mindest-Ausfalldauer ({F4_MOSQUITTO_UNHEALTHY_MIN} min)'
+                           if waiting else
+                           (' – starte Dienst neu...' if F4_MOSQUITTO_AUTORESTART else ' – Autorestart deaktiviert, kein Neustart.'))
                     )
-                    if F4_MOSQUITTO_AUTORESTART:
+                    if F4_MOSQUITTO_AUTORESTART and not waiting:
                         ok = restart_service(F4_MOSQUITTO_SERVICE)
                         state['mosquitto_last_restart_epoch'] = now
                         state['mosquitto_last_restart']       = fmt(now)
                         state['mosquitto_restart_count']      = int(state.get('mosquitto_restart_count', 0) or 0) + (1 if ok else 0)
                         log_action(state, 'mosquitto_restart', success=ok)
+                        state['mosquitto_unhealthy_since_epoch'] = now
 
                 g = get_process_state(F4_GATEWAY_PATTERN)
                 mqtt_status = check_gateway_mqtt_status(F4_GATEWAY_MQTT_PREFIX)
@@ -1108,17 +1159,23 @@ def run():
                     'Herzschlag veraltet' if mqtt_status['checked'] and mqtt_status['stale'] else
                     (f"Status: {mqtt_status['status_text']}" if mqtt_status['checked'] else '')
                 )
+                gw_unhealthy_min = _unhealthy_elapsed_min(
+                    state, 'gateway_unhealthy_since_epoch', not gw_healthy, now
+                )
                 if not gw_healthy:
                     # Wie bei Funktion 1: "läuft" allein reicht nicht – ein Prozess der lebt aber
                     # laut eigener Selbstauskunft nicht mit Mosquitto verbunden ist, gilt ebenso
                     # als ungesund und löst (bei aktivem Autorestart) einen Neustart aus.
                     reason_txt = 'läuft nicht' if not g['running'] else f"läuft, aber nicht mit Mosquitto verbunden ({state['gateway_broker_detail']})"
+                    waiting = F4_GATEWAY_AUTORESTART and gw_unhealthy_min < F4_GATEWAY_UNHEALTHY_MIN
                     log.warning(
                         f"MQTT-Gateway ({F4_GATEWAY_PATTERN}) {reason_txt}"
-                        + (' – beende Prozess, LoxBerry startet Kern-Daemons üblicherweise selbst neu...'
-                           if F4_GATEWAY_AUTORESTART else ' – Autorestart deaktiviert, kein Neustart.')
+                        + (f' – seit {gw_unhealthy_min:.0f} min, warte auf Mindest-Ausfalldauer ({F4_GATEWAY_UNHEALTHY_MIN} min)'
+                           if waiting else
+                           (' – beende Prozess, LoxBerry startet Kern-Daemons üblicherweise selbst neu...'
+                            if F4_GATEWAY_AUTORESTART else ' – Autorestart deaktiviert, kein Neustart.'))
                     )
-                    if F4_GATEWAY_AUTORESTART:
+                    if F4_GATEWAY_AUTORESTART and not waiting:
                         restart_process(F4_GATEWAY_PATTERN)
                         time.sleep(RESTART_WAIT)
                         g2 = get_process_state(F4_GATEWAY_PATTERN)
@@ -1138,6 +1195,7 @@ def run():
                             state, 'gateway_restart', success=ok,
                             detail='' if ok else 'LoxBerry hat den Dienst nicht automatisch neu gestartet – bitte manuell prüfen'
                         )
+                        state['gateway_unhealthy_since_epoch'] = now
                         if not ok:
                             log.error('MQTT-Gateway nach Beenden nicht automatisch neu gestartet – bitte manuell prüfen (z.B. LoxBerry neu starten)')
 
@@ -1188,17 +1246,24 @@ def run():
                 if F5_INTERNET_MONITOR:
                     inet_ok = tcp_check(F5_INTERNET_HOST, F5_INTERNET_PORT, timeout=5)
                     state['diag_internet_ok'] = inet_ok
+                    inet_unhealthy_min = _unhealthy_elapsed_min(
+                        state, 'diag_internet_unhealthy_since_epoch', not inet_ok, now
+                    )
                     if not inet_ok:
+                        waiting = F5_INTERNET_AUTOHEAL and inet_unhealthy_min < F5_INTERNET_UNHEALTHY_MIN
                         log.warning(
                             f'Internet nicht erreichbar (TCP {F5_INTERNET_HOST}:{F5_INTERNET_PORT})'
-                            + (' – starte Netzwerk neu...' if F5_INTERNET_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.')
+                            + (f' – seit {inet_unhealthy_min:.0f} min, warte auf Mindest-Ausfalldauer ({F5_INTERNET_UNHEALTHY_MIN} min)'
+                               if waiting else
+                               (' – starte Netzwerk neu...' if F5_INTERNET_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.'))
                         )
-                        if F5_INTERNET_AUTOHEAL:
+                        if F5_INTERNET_AUTOHEAL and not waiting:
                             ok = restart_networking()
                             state['diag_internet_last_restart_epoch'] = now
                             state['diag_internet_last_restart']       = fmt(now)
                             state['diag_internet_restart_count']      = int(state.get('diag_internet_restart_count', 0) or 0) + (1 if ok else 0)
                             log_action(state, 'diag_internet_restart', success=ok)
+                            state['diag_internet_unhealthy_since_epoch'] = now
 
                 if F5_TIME_MONITOR:
                     ts = check_time_sync()
@@ -1253,23 +1318,33 @@ def run():
                     for svc in F5_SERVICES_LIST:
                         s = get_service_state(svc)
                         prev = diag_services.get(svc, {})
+                        # Eigener Ausfall-Zeitstempel PRO Dienst (nicht ein globaler Key wie bei
+                        # den übrigen Checks) – jeder überwachte Dienst hat seine eigene
+                        # Mindest-Ausfalldauer-Uhr, unabhängig von den anderen.
+                        unhealthy_since = 0 if s['healthy'] else (int(prev.get('unhealthy_since_epoch', 0) or 0) or now)
+                        unhealthy_min = (now - unhealthy_since) / 60 if unhealthy_since else 0.0
                         entry = {
                             'active_state': s['active_state'], 'sub_state': s['sub_state'], 'healthy': s['healthy'],
                             'restart_count':      int(prev.get('restart_count', 0) or 0),
                             'last_restart':       prev.get('last_restart', '–'),
                             'last_restart_epoch': int(prev.get('last_restart_epoch', 0) or 0),
+                            'unhealthy_since_epoch': unhealthy_since,
                         }
                         if not s['healthy']:
+                            waiting = F5_SERVICES_AUTOHEAL and unhealthy_min < F5_SERVICES_UNHEALTHY_MIN
                             log.warning(
                                 f"Dienst {svc} nicht aktiv ({s['active_state']}/{s['sub_state']})"
-                                + (' – starte neu...' if F5_SERVICES_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Neustart.')
+                                + (f' – seit {unhealthy_min:.0f} min, warte auf Mindest-Ausfalldauer ({F5_SERVICES_UNHEALTHY_MIN} min)'
+                                   if waiting else
+                                   (' – starte neu...' if F5_SERVICES_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Neustart.'))
                             )
-                            if F5_SERVICES_AUTOHEAL:
+                            if F5_SERVICES_AUTOHEAL and not waiting:
                                 ok = restart_service(svc)
                                 entry['restart_count']      = entry['restart_count'] + (1 if ok else 0)
                                 entry['last_restart']       = fmt(now)
                                 entry['last_restart_epoch'] = now
                                 log_action(state, 'diag_service_restart', success=ok, detail=svc)
+                                entry['unhealthy_since_epoch'] = now
                         diag_services[svc] = entry
 
             # ---------------- Health-Ampel ----------------

@@ -56,6 +56,13 @@ function hw4l_action_label(string $action): array {
     return $map[$action] ?? ['❔', $action];
 }
 
+// Auto-Heal-Statuslabel: "Aus" / "An (sofort)" / "An (ab X min)" – konsistente Anzeige für
+// alle Auto-Heal-Schalter mit Mindest-Ausfalldauer (Funktion 1/4/5).
+function hw4l_autoheal_label(bool $enabled, int $unhealthy_min): string {
+    if (!$enabled) return 'Aus';
+    return $unhealthy_min > 0 ? "An (ab {$unhealthy_min} min)" : 'An (sofort)';
+}
+
 // Health-Ampel: Farbe/Icon/Label je Zustand (state.json 'health' – 'green'/'yellow'/'red')
 function hw4l_health_badge(string $level): array {
     static $map = [
