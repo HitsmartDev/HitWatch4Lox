@@ -151,9 +151,15 @@ unterscheiden kann ob beim Kunden das Internet weg ist oder nur Netbird selbst e
 <li><b>🕒 Zeit-Synchronisation:</b> fragt <code>timedatectl</code> ob die Systemzeit aktuell
 NTP-synchronisiert ist (keine eigene NTP-Abfrage nötig, nutzt systemds eigene Bewertung).
 Relevant u.a. für Funktion 3 (zeitgesteuerter Reboot) und TLS-Zertifikate. <b>Auto-Heal
-(optional):</b> startet <code>systemd-timesyncd</code> neu (Fallback <code>ntpdate</code>).
-Schlägt die Ermittlung fehl (z.B. <code>timedatectl</code> nicht installiert), landet der genaue
-Grund einmalig im Log.</li>
+(optional):</b> startet <code>systemd-timesyncd</code> neu (Fallback <code>ntpdate</code>) –
+ABER erst wenn der Zustand durchgehend länger als eine einstellbare Schwelle anhält (Standard
+10 min). Grund: <code>systemd-timesyncd</code> ist ein dauerhaft laufender Dienst, der von sich
+aus periodisch neu synchronisiert – ein kurzer Ausschlag direkt nach einem Neustart oder nach
+einem kurzen Netzwerk-Hänger löst sich normalerweise von selbst, ein sofortiger Neustart bei
+jedem einzelnen Prüfzyklus wäre unnötig. Bleibt die Zeit dagegen wirklich dauerhaft
+unsynchronisiert (in der Praxis beobachtet: auch nach 30+ Minuten noch nicht), greift Auto-Heal
+nach Ablauf der Schwelle ein. Schlägt die Ermittlung grundsätzlich fehl (z.B.
+<code>timedatectl</code> nicht installiert), landet der genaue Grund einmalig im Log.</li>
 <li><b>🛠️ Weitere Kern-Dienste:</b> eine frei konfigurierbare, kommagetrennte Liste zusätzlicher
 systemd-Dienste (z.B. <code>lighttpd</code>, <code>cron</code>, <code>ssh</code>) – Status wie bei
 Mosquitto in Funktion 4. <b>Auto-Heal (optional):</b> <code>systemctl restart</code> über denselben

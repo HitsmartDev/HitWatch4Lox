@@ -129,6 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $c .= "INTERNET_PORT={$f5_inet_port}\n";
         $c .= "TIME_MONITOR={$f5_time_mon}\n";
         $c .= "TIME_AUTOHEAL={$f5_time_heal}\n";
+        $c .= 'TIME_UNSYNCED_MIN=' . max(1, min(180, intval($_POST['f5_time_unsynced_min'] ?? 10))) . "\n";
         $c .= "SERVICES_MONITOR={$f5_svc_mon}\n";
         $c .= "SERVICES_AUTOHEAL={$f5_svc_heal}\n";
         $c .= "SERVICES_LIST={$f5_svc_list_str}\n\n";
@@ -528,8 +529,17 @@ render_header('app_settings');
                 </label>
                 <span class="sl-toggle-label">Zeit-Sync bei Abweichung automatisch neu starten</span>
             </div>
+            <div class="sl-slider-row">
+                <label>Erst eingreifen wenn durchgehend nicht synchron seit <span class="sl-slider-val" id="sf5tu"><?= cv('SYSTEM_DIAGNOSTICS','TIME_UNSYNCED_MIN','10') ?></span> min</label>
+                <input type="range" name="f5_time_unsynced_min" min="1" max="60" step="1"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','TIME_UNSYNCED_MIN','10') ?>"
+                       oninput="document.getElementById('sf5tu').textContent=this.value">
+            </div>
             <p class="sl-hint">Prüft ob systemd die Uhrzeit als NTP-synchronisiert meldet. Relevant u.a. für
-                Funktion 3 (zeitgesteuerter Reboot) und Zertifikate.</p>
+                Funktion 3 (zeitgesteuerter Reboot) und Zertifikate. systemd-timesyncd synchronisiert von
+                sich aus periodisch neu – ein kurzer Ausschlag direkt nach einem Neustart oder Netzwerk-
+                Hänger braucht keinen Eingriff und löst sich meist von selbst. Auto-Heal greift daher erst
+                ein, wenn der Zustand durchgehend länger als die obige Schwelle anhält.</p>
         </div>
         <hr>
         <div class="sl-field">

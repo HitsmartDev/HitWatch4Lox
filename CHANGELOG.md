@@ -5,6 +5,25 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.5] – 2026-09-21
+
+### Geändert – Zeit-Sync-Auto-Heal greift erst bei anhaltendem Zustand
+- Nutzer-Feedback nach Live-Test: Auto-Heal für die Zeit-Synchronisation griff bisher bei
+  **jedem** Prüfzyklus, sobald `timedatectl` `NTPSynchronized=no` meldete – auch bei einem
+  kurzen, harmlosen Ausschlag, aus dem sich `systemd-timesyncd` von selbst erholt hätte (z.B.
+  kurz nach einem Neustart). Gleichzeitig gab es aber auch reale Fälle, in denen die Zeit auch
+  nach 30+ Minuten noch nicht von selbst synchron wurde – dort SOLL Auto-Heal eingreifen.
+- Fix: neuer Schwellwert `TIME_UNSYNCED_MIN` (Standard 10 min, in den Einstellungen 1–60 min
+  einstellbar). Auto-Heal wird erst ausgelöst, wenn der unsynchronisierte Zustand DURCHGEHEND
+  länger als diese Schwelle anhält – ein kurzer Blip wird ignoriert (löst sich meist von
+  selbst), ein wirklich hängender Zustand wird weiterhin zuverlässig behoben. Nach einem
+  ausgelösten Neustart beginnt das Zeitfenster neu (kein sofortiges erneutes Eingreifen im
+  nächsten Zyklus).
+- Status-Tab zeigt bei "nicht synchronisiert" jetzt zusätzlich seit wie vielen Minuten, und bei
+  aktivem Auto-Heal ab welcher Schwelle eingegriffen wird.
+
+---
+
 ## [1.4] – 2026-09-20
 
 ### Behoben – Zeit-Synchronisation weiterhin "nicht ermittelbar" (echter Root Cause gefunden)

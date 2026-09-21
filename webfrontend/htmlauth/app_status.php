@@ -37,6 +37,7 @@ $f5_internet_monitor = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_MONI
 $f5_internet_autoheal= $f5_internet_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_AUTOHEAL'] ?? '0') == '1';
 $f5_time_monitor     = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['TIME_MONITOR'] ?? '1') == '1';
 $f5_time_autoheal    = $f5_time_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['TIME_AUTOHEAL'] ?? '0') == '1';
+$f5_time_unsynced_min = (int)($cfg['SYSTEM_DIAGNOSTICS']['TIME_UNSYNCED_MIN'] ?? 10);
 $f5_services_monitor = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['SERVICES_MONITOR'] ?? '0') == '1';
 $f5_services_autoheal= $f5_services_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['SERVICES_AUTOHEAL'] ?? '0') == '1';
 $f5_services_list = array_filter(array_map('trim', explode(',', $cfg['SYSTEM_DIAGNOSTICS']['SERVICES_LIST'] ?? '')));
@@ -401,13 +402,15 @@ render_header('app_status');
 <?php endif; ?>
 <?php if ($f5_time_monitor):
     $ts = $state['diag_time_synced'] ?? null;
+    $ts_since = (int)($state['diag_time_unsynced_since_epoch'] ?? 0);
+    $ts_unsynced_min = $ts_since > 0 ? round((time() - $ts_since) / 60) : 0;
 ?>
         <ul class="sl-info-list">
             <li><span class="sl-info-key">🕒 Zeit-Synchronisation</span>
                 <span class="sl-info-val <?= $ts === false ? 'warn' : ($ts === true ? 'ok' : '') ?>">
-                    <?= $ts === true ? 'synchronisiert' : ($ts === false ? 'nicht synchronisiert' : 'nicht ermittelbar') ?></span></li>
+                    <?= $ts === true ? 'synchronisiert' : ($ts === false ? "nicht synchronisiert seit {$ts_unsynced_min} min" : 'nicht ermittelbar') ?></span></li>
             <li><span class="sl-info-key">Auto-Heal</span>
-                <span class="sl-info-val" style="color:<?= $f5_time_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_time_autoheal ? 'An' : 'Aus' ?></span></li>
+                <span class="sl-info-val" style="color:<?= $f5_time_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_time_autoheal ? "An (ab {$f5_time_unsynced_min} min)" : 'Aus' ?></span></li>
         </ul>
 <?php endif; ?>
 <?php if ($f5_services_monitor && $f5_services_list):

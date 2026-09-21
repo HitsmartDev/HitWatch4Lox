@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.4'
+DAEMON_VERSION = '1.5'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -204,6 +204,10 @@ F5_INTERNET_PORT     = int(get_cfg('SYSTEM_DIAGNOSTICS', 'INTERNET_PORT', '53') 
 
 F5_TIME_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_MONITOR', '1') == '1'
 F5_TIME_AUTOHEAL = F5_TIME_MONITOR and get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_AUTOHEAL', '0') == '1'
+# systemd-timesyncd synchronisiert von sich aus periodisch neu – ein kurzer Ausschlag (z.B. kurz
+# nach einem Neustart) braucht keinen Eingriff. Auto-Heal greift daher erst wenn der Zustand
+# durchgehend länger als diese Schwelle anhält (Standard 10 min).
+F5_TIME_UNSYNCED_MIN = max(1, min(180, int(get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_UNSYNCED_MIN', '10'))))
 
 F5_SERVICES_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_MONITOR', '0') == '1'
 F5_SERVICES_AUTOHEAL = F5_SERVICES_MONITOR and get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_AUTOHEAL', '0') == '1'
@@ -1206,19 +1210,43 @@ def run():
                                 f"lieferte keinen Wert): {ts.get('error', 'unbekannter Grund')}"
                             )
                             _time_unavailable_logged = True
+                        state['diag_time_unsynced_since_epoch'] = 0  # nicht beurteilbar, kein Timer
                     else:
                         _time_unavailable_logged = False
-                    if ts['ok'] and ts['synced'] is False:
-                        log.warning(
-                            'Systemzeit nicht synchronisiert (NTP)'
-                            + (' – starte Zeit-Synchronisation neu...' if F5_TIME_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.')
-                        )
-                        if F5_TIME_AUTOHEAL:
-                            ok = sync_time_now()
-                            state['diag_time_last_restart_epoch'] = now
-                            state['diag_time_last_restart']       = fmt(now)
-                            state['diag_time_restart_count']      = int(state.get('diag_time_restart_count', 0) or 0) + (1 if ok else 0)
-                            log_action(state, 'diag_time_restart', success=ok)
+                        if ts['synced'] is False:
+                            # systemd-timesyncd ist ein dauerhaft laufender Dienst, der von sich aus
+                            # periodisch erneut versucht zu synchronisieren – ein kurzer Ausschlag
+                            # (z.B. direkt nach einem Neustart, oder ein kurzer Netz-Hänger) löst
+                            # sich normalerweise von SELBST, ohne dass ein Neustart nötig wäre. Ein
+                            # sofortiger Auto-Heal bei jedem einzelnen Prüfzyklus wäre daher unnötig
+                            # aggressiv. Erst wenn der Zustand über F5_TIME_UNSYNCED_MIN Minuten
+                            # anhält (Standard 10 min), greift Auto-Heal tatsächlich ein.
+                            since = state.get('diag_time_unsynced_since_epoch') or 0
+                            if since <= 0:
+                                since = now
+                                state['diag_time_unsynced_since_epoch'] = since
+                            unsynced_min = (now - since) / 60
+                            if F5_TIME_AUTOHEAL and unsynced_min >= F5_TIME_UNSYNCED_MIN:
+                                log.warning(
+                                    f'Systemzeit seit {unsynced_min:.0f} min nicht synchronisiert '
+                                    '(NTP) – starte Zeit-Synchronisation neu...'
+                                )
+                                ok = sync_time_now()
+                                state['diag_time_last_restart_epoch'] = now
+                                state['diag_time_last_restart']       = fmt(now)
+                                state['diag_time_restart_count']      = int(state.get('diag_time_restart_count', 0) or 0) + (1 if ok else 0)
+                                log_action(state, 'diag_time_restart', success=ok)
+                                # Fenster neu starten statt bei jedem weiteren Zyklus sofort wieder
+                                # einzugreifen – gibt dem Neustart Zeit zu wirken.
+                                state['diag_time_unsynced_since_epoch'] = now
+                            else:
+                                log.warning(
+                                    f'Systemzeit seit {unsynced_min:.0f} min nicht synchronisiert (NTP)'
+                                    + (f' – noch unter der {F5_TIME_UNSYNCED_MIN}-min-Schwelle, warte ab'
+                                       if F5_TIME_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.')
+                                )
+                        else:
+                            state['diag_time_unsynced_since_epoch'] = 0
 
                 if F5_SERVICES_MONITOR and F5_SERVICES_LIST:
                     diag_services = state.setdefault('diag_services', {})

@@ -1,13 +1,11 @@
 ## 📌 Projekt-Status
-- **Version:** 1.4 (2026-09-20: v1.3 lieferte den entscheidenden Log-Hinweis `RC=0, keine
-  Ausgabe` für die Zeit-Sync – Ursache war eine erfundene D-Bus-Property
-  `SystemClockSynchronized`, die es im `timedate1`-Interface gar nicht gibt (nur
-  `NTPSynchronized`); eine einzelne ungültige Property in der Liste ließ `timedatectl show`
-  komplett leer zurückkehren. Jetzt nur noch die echte Property + Fallback auf `timedatectl
-  status`-Textparsing. CPU-Temperatur bleibt beim Nutzer "nicht ermittelbar" – Log bestätigt
-  explizit weder `thermal_zone*` noch `vcgencmd` vorhanden, plausibel eine virtualisierte
-  LoxBerry-Instanz ohne durchgereichten Sensor, softwareseitig nicht behebbar. Zusätzlich:
-  Hilfe-Seite überarbeitet mit vollständiger MQTT-Topic-Referenz inkl. aller möglichen Werte.)
+- **Version:** 1.5 (2026-09-21: Nutzer-Feedback nach Live-Betrieb – Auto-Heal für Zeit-Sync griff
+  bei JEDEM Prüfzyklus sobald `NTPSynchronized=no`, auch bei kurzen harmlosen Ausschlägen aus
+  denen sich `systemd-timesyncd` von selbst erholt (der Dienst synchronisiert von sich aus
+  periodisch neu). Gleichzeitig gab es beim Nutzer aber auch reale Fälle mit 30+ Minuten
+  andauernder Nicht-Synchronisation, wo Auto-Heal durchaus sinnvoll ist. Neuer Schwellwert
+  `TIME_UNSYNCED_MIN` (Standard 10 min, einstellbar) – Auto-Heal greift erst wenn der Zustand
+  DURCHGEHEND länger anhält, nicht bei jedem einzelnen Blip.)
   Basiert auf v1.2 (2026-09-20): Live-Test von v1.1 zeigte einen Regressions-Bug –
   `mqtt_publish_status()` gab bei JEDER Veröffentlichung einen TypeError, weil
   `publish.multiple()` anders als `publish.single()` kein globales `qos`-Argument kennt.
@@ -198,14 +196,32 @@
   Ergebnis ist statt eines Bugs.
   Zusätzlich auf Nutzerwunsch: Hilfe-Seite massiv erweitert (vollständige MQTT-Topic-Referenz
   inkl. aller Ampel-/systemd-/Event-Action-Werte, nicht nur Typen).
+- **v1.5 – Zeit-Sync-Auto-Heal: Design-Feedback vom Nutzer, nicht nur ein Bug:** Nach dem
+  root-cause-Fix in v1.4 fragte der Nutzer zu Recht, warum Auto-Heal überhaupt eingreift, wenn
+  LoxBerry (systemd-timesyncd) die Zeit doch ohnehin selbst synchronisiert – anders als
+  Mosquitto/Netbird, die in einem Zustand hängen bleiben KÖNNEN, aus dem sie sich nicht selbst
+  befreien, ist `systemd-timesyncd` von Haus aus selbstheilend (periodischer Retry). Ein
+  Neustart bei jedem einzelnen "gerade nicht synchron"-Zyklus ist daher meist unnötig – ABER
+  der Nutzer bestätigte einen realen Fall mit 30+ Minuten andauernder Nicht-Synchronisation
+  OHNE Selbstheilung, wo Auto-Heal durchaus greifen soll. Lösung: Persistenz-Schwelle
+  `TIME_UNSYNCED_MIN` (Standard 10 min) – `diag_time_unsynced_since_epoch` merkt sich den
+  Beginn des unsynchronisierten Zustands, Auto-Heal löst erst aus wenn die Schwelle
+  DURCHGEHEND überschritten wird (Reset auf `now` nach jedem Heal-Versuch, damit nicht bei
+  jedem folgenden Zyklus sofort erneut ausgelöst wird). Dieselbe Überlegung (Internet-Auto-Heal
+  greift ebenfalls sofort bei jedem Zyklus) wurde dem Nutzer als mögliche Erweiterung genannt,
+  aber NICHT umgesetzt – nur auf explizite Anfrage.
 - **Noch offen:**
   - [ ] Funktion 5 (alle sechs Sub-Checks + Auto-Heal-Aktionen), die Health-Ampel und das
     Event-Topic sind mangels Linux-Testumgebung nur isoliert (Funktionsebene, simulierter State)
     getestet worden, nicht vollständig auf einem echten LoxBerry. Live-Test bestätigte bereits
-    Speicher/RAM/Internet-Anzeige und die MQTT-Ampel als funktionierend. Zeit-Sync nach v1.4 vom
-    Nutzer noch nicht verifiziert. CPU-Temperatur wird auf diesem konkreten (vermutlich
-    virtualisierten) Gerät vermutlich dauerhaft "nicht ermittelbar" bleiben – kein weiterer
-    Fixversuch geplant, da kein Sensor vorhanden ist.
+    Speicher/RAM/Internet-Anzeige und die MQTT-Ampel als funktionierend, Zeit-Sync-Ermittlung
+    nach v1.4 als korrekt (`NTPSynchronized=no` wurde sauber erkannt). Die neue
+    Persistenz-Schwelle (v1.5) beim Nutzer noch nicht verifiziert. CPU-Temperatur wird auf
+    diesem konkreten (vermutlich virtualisierten) Gerät vermutlich dauerhaft "nicht ermittelbar"
+    bleiben – kein weiterer Fixversuch geplant, da kein Sensor vorhanden ist.
+  - [ ] Erwägenswert (noch nicht angefragt): dieselbe Persistenz-Schwellen-Logik auch für
+    Internet-Auto-Heal (Funktion 5) einführen, falls sich dort dasselbe Muster (Neustart bei
+    jedem kurzen Blip) als unnötig aggressiv herausstellt.
   - [ ] **Mit v0.9 erstmals wirklich testbar:** v0.6 (falscher Erkennungsweg) → v0.7 (Fehler
     unsichtbar) → v0.8 (falsche Auth-Keys) → v0.9 (Timeout-Bug) verhinderten jeweils einen echten
     Funktionstest von "Verbindung zu Mosquitto". Exakten `loxberry/mqttgateway`-Topic-Pfad daher
@@ -342,6 +358,8 @@
 - `diag_temp_available` (bool), `diag_temp_c`, `diag_temp_level`
 - `diag_internet_ok`, `diag_internet_restart_count`, `diag_internet_last_restart(_epoch)`
 - `diag_time_synced`, `diag_time_restart_count`, `diag_time_last_restart(_epoch)`
+- `diag_time_unsynced_since_epoch` (seit v1.5, 0 wenn synchron oder nicht beurteilbar – Basis
+  für die Persistenz-Schwelle `TIME_UNSYNCED_MIN`)
 - `diag_services` (Dict, Key = Dienstname, Value = `{active_state, sub_state, healthy,
   restart_count, last_restart, last_restart_epoch}` – persistiert Zähler über Zyklen hinweg)
 - `action_log` (Liste, max. 200 Einträge, neueste am Ende – `{epoch, time, action, success,
@@ -410,6 +428,10 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.5 (2026-09-21):** Auto-Heal für Zeit-Synchronisation greift nicht mehr bei jedem
+  einzelnen Prüfzyklus, sondern erst wenn der unsynchronisierte Zustand DURCHGEHEND länger als
+  eine einstellbare Schwelle anhält (Standard 10 min, `TIME_UNSYNCED_MIN`) – vermeidet unnötige
+  Neustarts bei kurzen, selbstheilenden Ausschlägen, behebt aber weiterhin echte Dauerzustände.
 - **v1.4 (2026-09-20):** Echter Root Cause der Zeit-Sync-Ermittlung gefunden: eine nicht
   existente D-Bus-Property `SystemClockSynchronized` in der Abfrageliste ließ `timedatectl show`
   komplett leer zurückkehren – jetzt nur noch die echte Property `NTPSynchronized` + Fallback
