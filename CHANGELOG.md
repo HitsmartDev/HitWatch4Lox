@@ -5,6 +5,37 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [2.0] – 2026-09-21
+
+### Geändert – Zeit-Synchronisation: direkte NTP-Abfrage statt systemd-Interpretation (Neuarchitektur)
+- Nach fünf aufeinanderfolgenden Live-Diagnose-Runden (v1.4–v1.9) stand fest: `timedatectl`/
+  `systemd-timesyncd`/`chrony` spiegeln auf realen LoxBerry-Installationen NICHT zuverlässig
+  wider, ob die Systemzeit tatsächlich stimmt. Bestätigter Fall: Ein LoxBerry nutzt LoxBerrys
+  eigene "Systemzeit"-Weboberfläche (intern `ntpdate`, kein dauerhaft laufender, von
+  `timedatectl` erkennbarer Dienst) – die Zeit war korrekt, aber kein von uns geprüfter
+  Mechanismus konnte das bestätigen.
+- **Neuarchitektur (auf Nutzerwunsch):** `check_time_sync()` fragt jetzt einen konfigurierbaren
+  NTP-Server (Standard `pool.ntp.org`, identisch zu LoxBerrys eigenem Standard) **direkt per
+  minimaler eigener SNTP-Implementierung** ab (ein UDP-Paket an Port 123, nur `socket`/`struct`,
+  keine externe Abhängigkeit) und vergleicht die Antwort mit der lokalen Systemzeit. Das macht
+  die Prüfung komplett unabhängig davon, welcher (falls überhaupt ein) NTP-Mechanismus auf dem
+  jeweiligen Gerät installiert ist.
+- Neuer Schwellwert `TIME_MAX_DRIFT_S` (Standard 60s): ab welcher gemessenen Abweichung die Zeit
+  als "nicht synchron" gilt. Bestehender `TIME_UNSYNCED_MIN` (Mindest-Ausfalldauer vor Auto-Heal)
+  bleibt unverändert.
+- **Auto-Heal setzt die Zeit jetzt direkt** per `ntpdate -u <Server>` (auf Nutzerwunsch:
+  "ntpdate aufrufen mit update") statt nur `systemd-timesyncd` neu zu starten – funktioniert
+  damit auch auf Systemen ohne `systemd-timesyncd`. Root-Helper-Unterbefehl `sync_time` nimmt
+  jetzt den konfigurierten NTP-Server als validiertes Argument entgegen (analog zu
+  `restart_service <name>`).
+- Die gesamte "Container vs. echte Hardware"-Unterscheidung aus v1.8/v1.9 entfällt ersatzlos –
+  sie war nur nötig, weil die alte, systemd-basierte Prüfung das eigentliche Problem nicht
+  direkt messen konnte. Die neue Prüfung braucht diese Unterscheidung nicht mehr.
+- Status-Tab zeigt jetzt den exakten gemessenen Zeitversatz in Sekunden sowie den verwendeten
+  NTP-Server. Neues MQTT-Topic `diag/time_offset_s`.
+
+---
+
 ## [1.9] – 2026-09-21
 
 ### Korrigiert – v1.8-Annahme war falsch: Gerät ist ein echter Raspberry Pi, kein Container

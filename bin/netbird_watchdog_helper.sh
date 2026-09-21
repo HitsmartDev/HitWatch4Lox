@@ -8,15 +8,15 @@
 # festen Unterbefehlen. postroot.sh gibt in /etc/sudoers.d/hitwatch4lox NUR die exakten
 # Aufrufe frei (siehe dort).
 #
-# EINZIGE Ausnahme mit einem vom Nutzer beeinflussten Argument: "restart_service <name>"
-# (Funktion 4 Mosquitto, Funktion 5 weitere Kerndienste). Dienstname aus den Plugin-
-# Einstellungen (je nach LoxBerry-Setup unterschiedlich). Wird hier UND vom Python-Daemon
-# gegen ein striktes Muster (nur Buchstaben/Ziffern/._@-) validiert, bevor er an systemctl
-# übergeben wird. Kein Shell-Passthrough, keine Sonderzeichen, kein "ALL" in sudoers.
+# Ausnahmen mit einem vom Nutzer beeinflussten Argument: "restart_service <name>" (Funktion 4
+# Mosquitto, Funktion 5 weitere Kerndienste) und "sync_time <ntp-server>" (Funktion 5,
+# NTP-Servername aus den Plugin-Einstellungen). Beide werden hier UND vom Python-Daemon gegen
+# ein striktes Muster validiert, bevor sie an systemctl/ntpdate übergeben werden. Kein
+# Shell-Passthrough, keine Sonderzeichen, kein "ALL" in sudoers.
 #
-# "restart_networking" und "sync_time" (Funktion 5 Auto-Heal, System-Diagnose) sind feste
-# Unterbefehle OHNE Argument – bewusst auf Neustart eines bestehenden Dienstes beschränkt,
-# KEIN Remounten von Dateisystemen o.ä. (zu riskant für unbeaufsichtigte Kundenstandorte).
+# "restart_networking" (Funktion 5 Auto-Heal, Internet) ist ein fester Unterbefehl OHNE
+# Argument – bewusst auf Neustart eines bestehenden Dienstes beschränkt, KEIN Remounten von
+# Dateisystemen o.ä. (zu riskant für unbeaufsichtigte Kundenstandorte).
 #
 # Das LoxBerry MQTT-Gateway (mqttgateway.pl) ist bewusst NICHT Teil dieses Root-Helpers – es
 # ist kein systemd-Dienst, sondern ein LoxBerry-Kern-Daemon. Der Python-Daemon prüft/beendet
@@ -34,6 +34,10 @@ _find_netbird() {
 
 _valid_service_name() {
     [[ "$1" =~ ^[A-Za-z0-9_.@-]{1,64}$ ]]
+}
+
+_valid_ntp_server() {
+    [[ "$1" =~ ^[A-Za-z0-9_.-]{1,253}$ ]]
 }
 
 case "$ACTION" in
@@ -104,8 +108,21 @@ case "$ACTION" in
         exit 127
         ;;
     sync_time)
-        # Funktion 5 Auto-Heal (Zeit-Synchronisation): NTP wieder aktivieren + Zeitdienst
-        # neu starten, mit ntpdate als letztem Fallback.
+        # Funktion 5 Auto-Heal (Zeit-Synchronisation): setzt die Systemzeit DIREKT per ntpdate
+        # gegen den vom Plugin konfigurierten NTP-Server (denselben, gegen den auch gemessen
+        # wurde) – funktioniert unabhängig davon ob systemd-timesyncd/chrony überhaupt
+        # installiert sind (Live-Fund: auf manchen LoxBerry-Systemen ist keins von beiden
+        # vorhanden, LoxBerrys eigene "Systemzeit"-Oberfläche nutzt ebenfalls ntpdate).
+        # systemd-timesyncd-Neustart nur als Fallback falls ntpdate fehlt.
+        NTPSERVER="${2:-pool.ntp.org}"
+        if ! _valid_ntp_server "$NTPSERVER"; then
+            echo "Ungültiger NTP-Servername: '${NTPSERVER}'" >&2
+            exit 2
+        fi
+        if command -v ntpdate >/dev/null 2>&1; then
+            ntpdate -u "$NTPSERVER"
+            exit $?
+        fi
         if command -v timedatectl >/dev/null 2>&1; then
             timedatectl set-ntp true 2>/dev/null
         fi
@@ -113,15 +130,11 @@ case "$ACTION" in
             systemctl restart systemd-timesyncd
             exit $?
         fi
-        if command -v ntpdate >/dev/null 2>&1; then
-            ntpdate -u pool.ntp.org
-            exit $?
-        fi
-        echo "Weder systemd-timesyncd noch ntpdate verfügbar" >&2
+        echo "Weder ntpdate noch systemd-timesyncd verfügbar" >&2
         exit 127
         ;;
     *)
-        echo "Verwendung: $0 {check|restart|reboot|restart_service <name>|restart_networking|sync_time}" >&2
+        echo "Verwendung: $0 {check|restart|reboot|restart_service <name>|restart_networking|sync_time <ntp-server>}" >&2
         exit 1
         ;;
 esac

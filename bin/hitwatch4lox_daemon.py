@@ -1,6 +1,6 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.9'
-import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
+DAEMON_VERSION = '2.0'
+import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, struct, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
 
@@ -148,8 +148,10 @@ MQTT_PASS          = get_cfg('MQTT', 'PASS', '')
 TOPIC_PREFIX        = get_cfg('MQTT', 'TOPIC_PREFIX', 'HitWatch/netbird_watchdog')
 
 # Nur Buchstaben/Ziffern/._@- erlaubt – wird an "sudo helper.sh restart_service <name>"
-# übergeben (die einzige Stelle mit einem vom Nutzer konfigurierbaren sudo-Argument).
+# übergeben (eine von zwei Stellen mit einem vom Nutzer konfigurierbaren sudo-Argument).
 _SERVICE_NAME_RE = re.compile(r'^[A-Za-z0-9_.@-]{1,64}$')
+# Für "sudo helper.sh sync_time <ntp-server>" – Hostnamen/IPs, kein '@' nötig, längere FQDNs erlaubt.
+_NTP_SERVER_RE = re.compile(r'^[A-Za-z0-9_.-]{1,253}$')
 
 def _valid_service_name(name: str) -> bool:
     return bool(name) and bool(_SERVICE_NAME_RE.match(name))
@@ -220,9 +222,17 @@ F5_INTERNET_UNHEALTHY_MIN = max(0, min(60, int(get_cfg('SYSTEM_DIAGNOSTICS', 'IN
 
 F5_TIME_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_MONITOR', '1') == '1'
 F5_TIME_AUTOHEAL = F5_TIME_MONITOR and get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_AUTOHEAL', '0') == '1'
-# systemd-timesyncd synchronisiert von sich aus periodisch neu – ein kurzer Ausschlag (z.B. kurz
-# nach einem Neustart) braucht keinen Eingriff. Auto-Heal greift daher erst wenn der Zustand
-# durchgehend länger als diese Schwelle anhält (Standard 10 min).
+# NTP-Server für die direkte Abfrage (siehe check_time_sync/_sntp_offset) – Standard identisch
+# zu LoxBerrys eigener "Systemzeit"-Standardeinstellung (0.pool.ntp.org bzw. pool.ntp.org).
+F5_TIME_NTP_SERVER = get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_NTP_SERVER', 'pool.ntp.org').strip() or 'pool.ntp.org'
+if F5_ENABLED and not _NTP_SERVER_RE.match(F5_TIME_NTP_SERVER):
+    log.warning(f'SYSTEM_DIAGNOSTICS.TIME_NTP_SERVER ungültig ({F5_TIME_NTP_SERVER!r}) – Fallback "pool.ntp.org"')
+    F5_TIME_NTP_SERVER = 'pool.ntp.org'
+# Ab welcher Abweichung (Sekunden) die Zeit als "nicht synchron" gilt.
+F5_TIME_MAX_DRIFT_S = max(1, min(3600, int(get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_MAX_DRIFT_S', '60'))))
+# Ein kurzer, einmaliger Ausschlag (z.B. eine ungenaue Einzelmessung) braucht keinen sofortigen
+# Eingriff. Auto-Heal greift daher erst wenn der Zustand durchgehend länger als diese Schwelle
+# anhält (Standard 10 min).
 F5_TIME_UNSYNCED_MIN = max(1, min(180, int(get_cfg('SYSTEM_DIAGNOSTICS', 'TIME_UNSYNCED_MIN', '10'))))
 
 F5_SERVICES_MONITOR  = F5_ENABLED and get_cfg('SYSTEM_DIAGNOSTICS', 'SERVICES_MONITOR', '0') == '1'
@@ -645,64 +655,44 @@ def check_cpu_temperature():
         errors.append(f'vcgencmd: {e}')
     return {'ok': False, 'temp_c': None, 'error': '; '.join(errors)[:250]}
 
-def _any_ntp_service_installed():
-    """Prüft ob wenigstens einer der gängigen NTP-Client-Dienste auf diesem System überhaupt
-    als systemd-Unit EXISTIERT (LoadState=loaded – unabhängig davon ob er gerade läuft).
-    Unterscheidet 'kein NTP-Client installiert' (z.B. typisch für LXC-Container, die die
-    Uhrzeit direkt vom Host-Kernel übernehmen und daher gar keinen eigenen NTP-Client
-    brauchen – die Zeit ist trotzdem korrekt) von 'NTP-Client installiert, aber nicht aktiv'
-    (ein echtes, meldenswertes Problem)."""
-    for svc in ('systemd-timesyncd.service', 'chrony.service', 'chronyd.service', 'ntp.service', 'ntpd.service'):
-        try:
-            r = subprocess.run(
-                ['systemctl', 'show', svc, '--property=LoadState', '--no-pager'],
-                capture_output=True, text=True, timeout=5,
-            )
-            if 'LoadState=loaded' in r.stdout:
-                return True
-        except Exception:
-            pass
-    return False
-
-def check_time_sync():
-    """Nutzt systemds eigene Sync-Bewertung (timedatectl) statt selbst eine NTP-Abfrage zu
-    bauen. Parst 'Key=Value'-Zeilen aus 'timedatectl show' OHNE das --value-Flag (das gibt es
-    erst ab systemd 230, 2016) – dasselbe robuste Muster wie get_service_state() weiter oben.
-    WICHTIG: Die einzige echte Property im 'org.freedesktop.timedate1'-D-Bus-Interface heißt
-    'NTPSynchronized' – ein früherer Versuch fragte zusätzlich ein nicht-existentes
-    'SystemClockSynchronized' ab; eine einzelne ungültige Property in der Liste ließ
-    'timedatectl show' auf manchen Systemen komplett LEER zurückkehren (RC=0, keine Ausgabe)
-    statt nur die gültige Property zu liefern.
-
-    Liefert zusätzlich 'ntp_present' – Live-Fund: Auf manchen LoxBerry-Installationen (vermutlich
-    LXC-Container auf Proxmox, die die Uhr vom Host-Kernel übernehmen) läuft GAR KEIN NTP-Client
-    (`timedatectl status` zeigt dort 'NTP service: n/a', RTC 'n/a', alle gängigen NTP-Dienste
-    inaktiv) – die Zeit ist trotzdem korrekt, 'NTPSynchronized=no' ist hier kein echtes Problem.
-    Der Aufrufer kann so zwischen "nicht synchron" (echte Warnung) und "kein NTP-Client
-    vorhanden" (informativ, kein Fehlalarm) unterscheiden."""
+def _sntp_offset(server, port=123, timeout=5):
+    """Minimale eigene SNTP-Abfrage (RFC 4330) per UDP – nur 'socket'/'struct', keine
+    Abhängigkeit von ntpdate/chrony/systemd-timesyncd. Live-Fund (v1.4-v1.9): timedatectl/
+    systemd-timesyncd/chrony spiegeln NICHT zuverlässig wider ob die Zeit tatsächlich stimmt,
+    wenn ein LoxBerry (wie mehrfach live bestätigt) einen eigenen, davon unabhängigen
+    Sync-Mechanismus nutzt (z.B. LoxBerrys "Systemzeit"-Weboberfläche via ntpdate) oder gar
+    keinen laufenden NTP-Dienst hat, obwohl die Zeit stimmt. Diese Abfrage prüft stattdessen
+    direkt und umgebungsunabhängig ob die Uhr JETZT korrekt ist – unabhängig davon was (falls
+    überhaupt etwas) sie synchron hält. Gibt den Zeitversatz in Sekunden zurück (positiv =
+    lokale Uhr geht nach) oder None bei Fehler. Keine hochpräzise NTP-Implementierung (keine
+    Round-Trip-Korrektur zweiter Ordnung) – für unseren Zweck (Drift im Sekunden-/Minutenbereich
+    erkennen) mehr als ausreichend genau."""
+    NTP_EPOCH_OFFSET = 2208988800  # Differenz NTP-Epoche (1.1.1900) zu Unix-Epoche (1.1.1970)
+    packet = b'\x1b' + 47 * b'\0'  # LI=0, VN=3, Mode=3 (Client-Request), Rest 0
     try:
-        r = subprocess.run(
-            ['timedatectl', 'show', '--property=NTPSynchronized'],
-            capture_output=True, text=True, timeout=10,
-        )
-        for line in r.stdout.splitlines():
-            if line.startswith('NTPSynchronized='):
-                synced = line.split('=', 1)[1].strip().lower() == 'yes'
-                return {'ok': True, 'synced': synced, 'ntp_present': synced or _any_ntp_service_installed()}
-        # Fallback: 'timedatectl status' ist die klassische, textbasierte Ausgabe und liefert
-        # auf praktisch jedem System (auch mit eingeschränktem D-Bus-Zugriff, z.B. in manchen
-        # LXC-Containern) zumindest die Zeile "System clock synchronized: yes/no".
-        r2 = subprocess.run(['timedatectl', 'status'], capture_output=True, text=True, timeout=10)
-        m = re.search(r'System clock synchronized:\s*(\w+)', r2.stdout, re.IGNORECASE)
-        if m:
-            synced = m.group(1).strip().lower() == 'yes'
-            return {'ok': True, 'synced': synced, 'ntp_present': synced or _any_ntp_service_installed()}
-        err = (r.stderr or r2.stderr or r2.stdout or f'RC={r.returncode}, keine Ausgabe').strip()[:150]
-        return {'ok': False, 'synced': None, 'ntp_present': True, 'error': err}
-    except FileNotFoundError:
-        return {'ok': False, 'synced': None, 'ntp_present': True, 'error': 'timedatectl nicht installiert'}
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(timeout)
+            t_sent = time.time()
+            sock.sendto(packet, (server, port))
+            data, _ = sock.recvfrom(48)
+            t_recv = time.time()
+        if len(data) < 48:
+            return None
+        # Transmit Timestamp (Sekunden-Teil) steht in Byte 40-43 der Antwort
+        secs = struct.unpack('!I', data[40:44])[0]
+        server_time = secs - NTP_EPOCH_OFFSET
+        local_time  = (t_sent + t_recv) / 2  # grobe Round-Trip-Mitte
+        return server_time - local_time
     except Exception as e:
-        return {'ok': False, 'synced': None, 'ntp_present': True, 'error': str(e)[:120]}
+        log.debug(f'SNTP-Abfrage an {server}:{port} fehlgeschlagen: {e}')
+        return None
+
+def check_time_sync(server, timeout=5):
+    """Fragt einen NTP-Server direkt ab (siehe _sntp_offset) und liefert den Zeitversatz."""
+    offset = _sntp_offset(server, timeout=timeout)
+    if offset is None:
+        return {'ok': False, 'offset_s': None, 'error': f'Keine Antwort von {server}:123 (UDP)'}
+    return {'ok': True, 'offset_s': offset}
 
 def restart_networking():
     rc, out, err = run_helper('restart_networking', timeout=30)
@@ -711,8 +701,11 @@ def restart_networking():
         return False
     return True
 
-def sync_time_now():
-    rc, out, err = run_helper('sync_time', timeout=20)
+def sync_time_now(server):
+    if not _NTP_SERVER_RE.match(server):
+        log.error(f'Zeit-Synchronisation abgelehnt – ungültiger NTP-Servername: {server!r}')
+        return False
+    rc, out, err = run_helper('sync_time', args=[server], timeout=20)
     if rc != 0:
         log.error(f'Zeit-Synchronisation fehlgeschlagen (RC={rc}): {(err or out).strip()[:300]}')
         return False
@@ -755,14 +748,8 @@ def compute_health(state):
         crit.append('Kein Internet')
 
     if F5_TIME_MONITOR and state.get('diag_time_synced') is False:
-        if state.get('diag_time_ntp_present', True):
-            warn.append('Systemzeit nicht synchronisiert')
-        else:
-            # Kann nicht zuverlässig zwischen "Container mit geteilter Host-Uhr" (unproblematisch)
-            # und "echte Hardware ohne eingerichtetes NTP" (Zeit kann über Wochen/Monate driften)
-            # unterschieden werden – bewusst weiterhin als Warnung sichtbar, damit der Nutzer
-            # selbst entscheidet statt dass das Plugin das fälschlich als unproblematisch annimmt.
-            warn.append('Kein NTP-Client installiert')
+        _off = state.get('diag_time_offset_s')
+        warn.append(f'Zeitabweichung {_off:+.0f}s' if isinstance(_off, (int, float)) else 'Systemzeit nicht synchronisiert')
 
     if F5_SERVICES_MONITOR:
         for name, info in (state.get('diag_services') or {}).items():
@@ -936,6 +923,8 @@ def mqtt_publish_status(state):
                 msgs.append({'topic': f'{TOPIC_PREFIX}/diag/internet_ok',    'payload': '1' if state.get('diag_internet_ok') else '0',   'retain': True})
             if F5_TIME_MONITOR:
                 msgs.append({'topic': f'{TOPIC_PREFIX}/diag/time_synced',    'payload': '1' if state.get('diag_time_synced') else '0',   'retain': True})
+                if state.get('diag_time_offset_s') is not None:
+                    msgs.append({'topic': f'{TOPIC_PREFIX}/diag/time_offset_s', 'payload': str(state.get('diag_time_offset_s')), 'retain': True})
         # publish.multiple() kennt anders als publish.single() KEIN globales 'qos'-Argument –
         # QoS wird stattdessen pro Nachricht über einen 'qos'-Key im jeweiligen Dict gesetzt
         # (hier nicht gesetzt, Default ist dann 0 je Nachricht). Ein fälschlich übergebenes
@@ -1012,7 +1001,6 @@ def run():
     # daher nur EINMAL pro Daemon-Lauf geloggt (Diagnose-Zweck), nicht bei jedem F5-Zyklus neu.
     _temp_unavailable_logged = False
     _time_unavailable_logged = False
-    _time_no_ntp_logged = False
 
     log.info(
         f'HitWatch4Lox Daemon gestartet (Version {DAEMON_VERSION}, PID {os.getpid()}) – '
@@ -1310,48 +1298,27 @@ def run():
                             state['diag_internet_unhealthy_since_epoch'] = now
 
                 if F5_TIME_MONITOR:
-                    ts = check_time_sync()
-                    state['diag_time_synced'] = ts.get('synced')
-                    state['diag_time_ntp_present'] = ts.get('ntp_present', True)
+                    ts = check_time_sync(F5_TIME_NTP_SERVER)
                     if not ts['ok']:
+                        state['diag_time_synced'] = None
+                        state['diag_time_offset_s'] = None
                         if not _time_unavailable_logged:
                             log.warning(
-                                'Zeit-Synchronisationsstatus nicht ermittelbar (timedatectl '
-                                f"lieferte keinen Wert): {ts.get('error', 'unbekannter Grund')}"
+                                f'Zeit-Abgleich mit NTP-Server {F5_TIME_NTP_SERVER} fehlgeschlagen: '
+                                f"{ts.get('error', 'unbekannter Grund')}"
                             )
                             _time_unavailable_logged = True
                         state['diag_time_unsynced_since_epoch'] = 0  # nicht beurteilbar, kein Timer
                     else:
                         _time_unavailable_logged = False
-                        if ts['synced'] is False and not ts.get('ntp_present', True):
-                            # Live-Fund: manche LoxBerry-Installationen haben GAR KEINEN NTP-Client
-                            # (systemd-timesyncd/chrony/ntp allesamt inaktiv/nicht installiert,
-                            # 'timedatectl status' zeigt 'NTP service: n/a'). Kann sowohl ein
-                            # Container mit geteilter Host-Uhr sein (unproblematisch) ALS AUCH
-                            # echte Hardware ohne eingerichtetes NTP (Zeit kann über Wochen/Monate
-                            # driften, z.B. Raspberry Pi ohne RTC) – von innerhalb des Gastsystems
-                            # NICHT zuverlässig unterscheidbar. Bewusst weiterhin als Warnung
-                            # sichtbar (nur einmalig geloggt, kein Dauerspam) statt das fälschlich
-                            # als unproblematisch anzunehmen. Kein Auto-Heal-Versuch (ein Neustart
-                            # eines nicht vorhandenen Dienstes wäre wirkungslos).
-                            state['diag_time_unsynced_since_epoch'] = 0
-                            if not _time_no_ntp_logged:
-                                log.warning(
-                                    'Kein NTP-Client installiert (systemd-timesyncd/chrony/ntp '
-                                    'nicht vorhanden) – auf einem Container mit geteilter Host-Uhr '
-                                    'unproblematisch, auf echter Hardware sollte ein NTP-Client '
-                                    'eingerichtet werden, sonst kann die Zeit langfristig driften.'
-                                )
-                                _time_no_ntp_logged = True
-                        elif ts['synced'] is False:
-                            _time_no_ntp_logged = False
-                            # systemd-timesyncd ist ein dauerhaft laufender Dienst, der von sich aus
-                            # periodisch erneut versucht zu synchronisieren – ein kurzer Ausschlag
-                            # (z.B. direkt nach einem Neustart, oder ein kurzer Netz-Hänger) löst
-                            # sich normalerweise von SELBST, ohne dass ein Neustart nötig wäre. Ein
-                            # sofortiger Auto-Heal bei jedem einzelnen Prüfzyklus wäre daher unnötig
-                            # aggressiv. Erst wenn der Zustand über F5_TIME_UNSYNCED_MIN Minuten
-                            # anhält (Standard 10 min), greift Auto-Heal tatsächlich ein.
+                        offset = ts['offset_s']
+                        state['diag_time_offset_s'] = round(offset, 1)
+                        drift_ok = abs(offset) <= F5_TIME_MAX_DRIFT_S
+                        state['diag_time_synced'] = drift_ok
+                        if not drift_ok:
+                            # Ein einzelner Ausschlag (z.B. kurzzeitige Messungenauigkeit) braucht
+                            # keinen sofortigen Eingriff. Auto-Heal greift daher erst wenn der
+                            # Zustand über F5_TIME_UNSYNCED_MIN Minuten anhält (Standard 10 min).
                             since = state.get('diag_time_unsynced_since_epoch') or 0
                             if since <= 0:
                                 since = now
@@ -1359,25 +1326,25 @@ def run():
                             unsynced_min = (now - since) / 60
                             if F5_TIME_AUTOHEAL and unsynced_min >= F5_TIME_UNSYNCED_MIN:
                                 log.warning(
-                                    f'Systemzeit seit {unsynced_min:.0f} min nicht synchronisiert '
-                                    '(NTP) – starte Zeit-Synchronisation neu...'
+                                    f'Zeitabweichung {offset:+.1f}s (Server {F5_TIME_NTP_SERVER}) seit '
+                                    f'{unsynced_min:.0f} min – setze Systemzeit neu...'
                                 )
-                                ok = sync_time_now()
+                                ok = sync_time_now(F5_TIME_NTP_SERVER)
                                 state['diag_time_last_restart_epoch'] = now
                                 state['diag_time_last_restart']       = fmt(now)
                                 state['diag_time_restart_count']      = int(state.get('diag_time_restart_count', 0) or 0) + (1 if ok else 0)
-                                log_action(state, 'diag_time_restart', success=ok)
+                                log_action(state, 'diag_time_restart', success=ok, detail=f'{offset:+.1f}s')
                                 # Fenster neu starten statt bei jedem weiteren Zyklus sofort wieder
-                                # einzugreifen – gibt dem Neustart Zeit zu wirken.
+                                # einzugreifen – gibt der Korrektur Zeit zu wirken.
                                 state['diag_time_unsynced_since_epoch'] = now
                             else:
                                 log.warning(
-                                    f'Systemzeit seit {unsynced_min:.0f} min nicht synchronisiert (NTP)'
+                                    f'Zeitabweichung {offset:+.1f}s (Server {F5_TIME_NTP_SERVER}, '
+                                    f'Schwelle ±{F5_TIME_MAX_DRIFT_S}s) seit {unsynced_min:.0f} min'
                                     + (f' – noch unter der {F5_TIME_UNSYNCED_MIN}-min-Schwelle, warte ab'
                                        if F5_TIME_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.')
                                 )
                         else:
-                            _time_no_ntp_logged = False
                             state['diag_time_unsynced_since_epoch'] = 0
 
                 if F5_SERVICES_MONITOR and F5_SERVICES_LIST:

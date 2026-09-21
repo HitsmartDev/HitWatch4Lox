@@ -71,6 +71,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $f5_temp_crit  = max($f5_temp_warn, min(120, intval($_POST['f5_temp_crit'] ?? 80)));
         $f5_inet_host  = strip_tags(trim($_POST['f5_internet_host'] ?? '1.1.1.1')) ?: '1.1.1.1';
         $f5_inet_port  = max(1, min(65535, intval($_POST['f5_internet_port'] ?? 53)));
+
+        // NTP-Server für den direkten Zeit-Abgleich – gleiche Validierung wie im Python-Daemon
+        // (_NTP_SERVER_RE) und im Root-Helper (_valid_ntp_server), da derselbe Wert am Ende an
+        // "sudo helper.sh sync_time <server>" übergeben wird.
+        $ntp_re = '/^[A-Za-z0-9_.-]{1,253}$/';
+        $f5_ntp_server = trim($_POST['f5_time_ntp_server'] ?? 'pool.ntp.org');
+        if (!preg_match($ntp_re, $f5_ntp_server)) $f5_ntp_server = 'pool.ntp.org';
+        $f5_time_max_drift = max(1, min(3600, intval($_POST['f5_time_max_drift'] ?? 60)));
         $f5_svc_list = [];
         foreach (explode(',', $_POST['f5_services_list'] ?? '') as $s) {
             $s = trim($s);
@@ -139,6 +147,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $c .= 'INTERNET_UNHEALTHY_MIN=' . max(0, min(60, intval($_POST['f5_internet_unhealthy_min'] ?? 3))) . "\n";
         $c .= "TIME_MONITOR={$f5_time_mon}\n";
         $c .= "TIME_AUTOHEAL={$f5_time_heal}\n";
+        $c .= "TIME_NTP_SERVER={$f5_ntp_server}\n";
+        $c .= "TIME_MAX_DRIFT_S={$f5_time_max_drift}\n";
         $c .= 'TIME_UNSYNCED_MIN=' . max(1, min(180, intval($_POST['f5_time_unsynced_min'] ?? 10))) . "\n";
         $c .= "SERVICES_MONITOR={$f5_svc_mon}\n";
         $c .= "SERVICES_AUTOHEAL={$f5_svc_heal}\n";
@@ -569,19 +579,33 @@ render_header('app_settings');
                     <input type="checkbox" id="f5_time_autoheal" name="f5_time_autoheal" <?= $f5_time_autoheal ? 'checked' : '' ?> <?= !$f5_time_monitor ? 'disabled' : '' ?>>
                     <span class="sl-toggle-slider"></span>
                 </label>
-                <span class="sl-toggle-label">Zeit-Sync bei Abweichung automatisch neu starten</span>
+                <span class="sl-toggle-label">Zeit bei Abweichung automatisch neu setzen (ntpdate)</span>
+            </div>
+            <div class="sl-field">
+                <label for="f5_time_ntp_server">NTP-Server für den Zeit-Abgleich</label>
+                <input type="text" id="f5_time_ntp_server" name="f5_time_ntp_server" value="<?= cv('SYSTEM_DIAGNOSTICS','TIME_NTP_SERVER','pool.ntp.org') ?>">
             </div>
             <div class="sl-slider-row">
-                <label>Erst eingreifen wenn durchgehend nicht synchron seit <span class="sl-slider-val" id="sf5tu"><?= cv('SYSTEM_DIAGNOSTICS','TIME_UNSYNCED_MIN','10') ?></span> min</label>
+                <label>Als Abweichung zählen ab <span class="sl-slider-val" id="sf5td"><?= cv('SYSTEM_DIAGNOSTICS','TIME_MAX_DRIFT_S','60') ?></span> s</label>
+                <input type="range" name="f5_time_max_drift" min="5" max="600" step="5"
+                       value="<?= cv('SYSTEM_DIAGNOSTICS','TIME_MAX_DRIFT_S','60') ?>"
+                       oninput="document.getElementById('sf5td').textContent=this.value">
+            </div>
+            <div class="sl-slider-row">
+                <label>Erst eingreifen wenn durchgehend abweichend seit <span class="sl-slider-val" id="sf5tu"><?= cv('SYSTEM_DIAGNOSTICS','TIME_UNSYNCED_MIN','10') ?></span> min</label>
                 <input type="range" name="f5_time_unsynced_min" min="1" max="60" step="1"
                        value="<?= cv('SYSTEM_DIAGNOSTICS','TIME_UNSYNCED_MIN','10') ?>"
                        oninput="document.getElementById('sf5tu').textContent=this.value">
             </div>
-            <p class="sl-hint">Prüft ob systemd die Uhrzeit als NTP-synchronisiert meldet. Relevant u.a. für
-                Funktion 3 (zeitgesteuerter Reboot) und Zertifikate. systemd-timesyncd synchronisiert von
-                sich aus periodisch neu – ein kurzer Ausschlag direkt nach einem Neustart oder Netzwerk-
-                Hänger braucht keinen Eingriff und löst sich meist von selbst. Auto-Heal greift daher erst
-                ein, wenn der Zustand durchgehend länger als die obige Schwelle anhält.</p>
+            <p class="sl-hint">Fragt den oben angegebenen NTP-Server DIREKT per UDP ab und vergleicht die
+                Antwort mit der lokalen Systemzeit (eigene, minimale SNTP-Abfrage – funktioniert
+                unabhängig davon ob <code>systemd-timesyncd</code>/<code>chrony</code>/<code>ntpdate</code>
+                überhaupt installiert sind). Relevant u.a. für Funktion 3 (zeitgesteuerter Reboot) und
+                Zertifikate. Ein kurzer Ausschlag (z.B. eine einzelne ungenaue Messung) braucht keinen
+                sofortigen Eingriff – Auto-Heal greift erst wenn die Abweichung durchgehend länger als die
+                obige Schwelle anhält, und setzt die Zeit dann direkt per <code>ntpdate -u</code> gegen den
+                konfigurierten Server (Fallback <code>systemd-timesyncd</code>-Neustart falls
+                <code>ntpdate</code> fehlt).</p>
         </div>
         <hr>
         <div class="sl-field">

@@ -44,6 +44,7 @@ $f5_internet_autoheal= $f5_internet_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['INTE
 $f5_internet_unhealthy_min = (int)($cfg['SYSTEM_DIAGNOSTICS']['INTERNET_UNHEALTHY_MIN'] ?? 3);
 $f5_time_monitor     = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['TIME_MONITOR'] ?? '1') == '1';
 $f5_time_autoheal    = $f5_time_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['TIME_AUTOHEAL'] ?? '0') == '1';
+$f5_ntp_server        = $cfg['SYSTEM_DIAGNOSTICS']['TIME_NTP_SERVER'] ?? 'pool.ntp.org';
 $f5_time_unsynced_min = (int)($cfg['SYSTEM_DIAGNOSTICS']['TIME_UNSYNCED_MIN'] ?? 10);
 $f5_services_monitor = $f5_enabled && ($cfg['SYSTEM_DIAGNOSTICS']['SERVICES_MONITOR'] ?? '0') == '1';
 $f5_services_autoheal= $f5_services_monitor && ($cfg['SYSTEM_DIAGNOSTICS']['SERVICES_AUTOHEAL'] ?? '0') == '1';
@@ -417,22 +418,26 @@ render_header('app_status');
 <?php endif; ?>
 <?php if ($f5_time_monitor):
     $ts = $state['diag_time_synced'] ?? null;
-    $ts_ntp_present = (bool)($state['diag_time_ntp_present'] ?? true);
+    $ts_offset = $state['diag_time_offset_s'] ?? null;
     $ts_since = (int)($state['diag_time_unsynced_since_epoch'] ?? 0);
     $ts_unsynced_min = $ts_since > 0 ? round((time() - $ts_since) / 60) : 0;
-    $ts_no_ntp = ($ts === false && !$ts_ntp_present);
 ?>
         <ul class="sl-info-list">
             <li><span class="sl-info-key">🕒 Zeit-Synchronisation</span>
                 <span class="sl-info-val <?= $ts === false ? 'warn' : ($ts === true ? 'ok' : '') ?>">
-                    <?= $ts === true ? 'synchronisiert' : ($ts_no_ntp ? 'kein NTP-Client installiert' : ($ts === false ? "nicht synchronisiert seit {$ts_unsynced_min} min" : 'nicht ermittelbar')) ?></span></li>
+                    <?php if ($ts === true): ?>
+                        synchron (<?= h(sprintf('%+.1f', $ts_offset)) ?>s)
+                    <?php elseif ($ts === false): ?>
+                        Abweichung <?= h(sprintf('%+.1f', $ts_offset)) ?>s seit <?= $ts_unsynced_min ?> min
+                    <?php else: ?>
+                        nicht ermittelbar
+                    <?php endif; ?>
+                </span></li>
+            <li><span class="sl-info-key">NTP-Server</span>
+                <span class="sl-info-val"><code><?= h($f5_ntp_server) ?></code></span></li>
             <li><span class="sl-info-key">Auto-Heal</span>
                 <span class="sl-info-val" style="color:<?= $f5_time_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f5_time_autoheal, $f5_time_unsynced_min)) ?></span></li>
         </ul>
-<?php if ($ts_no_ntp): ?>
-        <p class="sl-hint" style="margin-top:-0.3rem">Auf einem Container mit geteilter Host-Uhr unproblematisch, auf echter
-            Hardware sollte ein NTP-Client eingerichtet werden (sonst kann die Zeit über Wochen/Monate driften).</p>
-<?php endif; ?>
 <?php endif; ?>
 <?php if ($f5_services_monitor && $f5_services_list):
     $diag_services = $state['diag_services'] ?? [];

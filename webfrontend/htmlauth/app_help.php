@@ -170,28 +170,25 @@ unterscheiden kann ob beim Kunden das Internet weg ist oder nur Netbird selbst e
 <code>networking</code>) neu – kein Interface-Down/Up-Gebastel. Erst nach einer einstellbaren
 Mindest-Ausfalldauer (Standard 3 min), da kurze Aussetzer (z.B. ein DHCP-Renew) sich oft von
 selbst lösen, bevor der Netzwerk-Dienst neu gestartet werden müsste.</li>
-<li><b>🕒 Zeit-Synchronisation:</b> fragt <code>timedatectl</code> ob die Systemzeit aktuell
-NTP-synchronisiert ist (keine eigene NTP-Abfrage nötig, nutzt systemds eigene Bewertung).
-Relevant u.a. für Funktion 3 (zeitgesteuerter Reboot) und TLS-Zertifikate. <b>Auto-Heal
-(optional):</b> startet <code>systemd-timesyncd</code> neu (Fallback <code>ntpdate</code>) –
-ABER erst wenn der Zustand durchgehend länger als eine einstellbare Schwelle anhält (Standard
-10 min). Grund: <code>systemd-timesyncd</code> ist ein dauerhaft laufender Dienst, der von sich
-aus periodisch neu synchronisiert – ein kurzer Ausschlag direkt nach einem Neustart oder nach
-einem kurzen Netzwerk-Hänger löst sich normalerweise von selbst, ein sofortiger Neustart bei
-jedem einzelnen Prüfzyklus wäre unnötig. Bleibt die Zeit dagegen wirklich dauerhaft
-unsynchronisiert (in der Praxis beobachtet: auch nach 30+ Minuten noch nicht), greift Auto-Heal
-nach Ablauf der Schwelle ein. Schlägt die Ermittlung grundsätzlich fehl (z.B.
-<code>timedatectl</code> nicht installiert), landet der genaue Grund einmalig im Log.
-<b>"Kein NTP-Client installiert" statt "nicht synchronisiert":</b> Manche LoxBerry-Installationen
-haben GAR KEINEN NTP-Client (<code>timedatectl status</code> zeigt dort "NTP service: n/a",
-<code>systemd-timesyncd</code>/<code>chrony</code>/<code>ntp</code> sind allesamt nicht
-vorhanden). HitWatch4Lox kann von innerhalb des Gastsystems NICHT zuverlässig unterscheiden ob
-das ein Container mit geteilter Host-Uhr ist (dort unproblematisch, die Zeit stimmt trotzdem)
-oder echte Hardware ohne eingerichtetes NTP (z.B. ein Raspberry Pi ohne RTC-Hardware – die Zeit
-kann dort über Wochen/Monate driften, ohne dass etwas sie korrigiert). Bewusste Entscheidung:
-weiterhin als Warnung anzeigen statt das fälschlich als unproblematisch anzunehmen – nur du
-kennst dein Gerät. Kein Auto-Heal-Versuch in jedem Fall (ein Neustart eines nicht vorhandenen
-Dienstes wäre wirkungslos).</li>
+<li><p><b>🕒 Zeit-Synchronisation:</b> fragt einen konfigurierbaren NTP-Server (Standard
+<code>pool.ntp.org</code>) <b>direkt per eigener, minimaler SNTP-Abfrage</b> ab (nur ein
+UDP-Paket an Port 123, keine externe Abhängigkeit) und vergleicht die Antwort mit der lokalen
+Systemzeit. Bewusst NICHT über <code>timedatectl</code>/<code>systemd-timesyncd</code>/
+<code>chrony</code> – Live-Erfahrung zeigte, dass diese auf manchen LoxBerry-Installationen
+schlicht nicht widerspiegeln ob die Zeit stimmt: LoxBerrys eigene "Systemzeit"-Weboberfläche
+nutzt intern <code>ntpdate</code> (kein dauerhaft laufender, von <code>timedatectl</code>
+erkennbarer Dienst), und manche Geräte haben überhaupt keinen erkennbaren NTP-Mechanismus
+obwohl die Uhr korrekt geht. Die direkte Abfrage macht die Prüfung komplett unabhängig davon,
+welcher (falls überhaupt ein) NTP-Mechanismus auf dem jeweiligen Gerät läuft.</p>
+<p>Relevant u.a. für Funktion 3 (zeitgesteuerter Reboot) und TLS-Zertifikate. Schwellen: "Als
+Abweichung zählen ab X Sekunden" (Standard 60 s) legt fest wie groß der gemessene Versatz sein
+muss, um überhaupt als Problem zu gelten (ein einzelner, leicht ungenauer Messwert liegt weit
+darunter). <b>Auto-Heal (optional):</b> setzt die Systemzeit direkt per <code>ntpdate -u
+&lt;Server&gt;</code> (Fallback <code>systemd-timesyncd</code>-Neustart falls kein
+<code>ntpdate</code> installiert ist) – ABER erst wenn die Abweichung durchgehend länger als
+eine einstellbare Schwelle anhält (Standard 10 min), damit ein einzelner Messausreißer nicht
+sofort einen Eingriff auslöst. Schlägt die Abfrage grundsätzlich fehl (z.B. NTP-Port 123/UDP
+ausgehend blockiert, Server nicht erreichbar), landet der genaue Grund einmalig im Log.</p></li>
 <li><b>🛠️ Weitere Kern-Dienste:</b> eine frei konfigurierbare, kommagetrennte Liste zusätzlicher
 systemd-Dienste (z.B. <code>lighttpd</code>, <code>cron</code>, <code>ssh</code>) – Status wie bei
 Mosquitto in Funktion 4. <b>Auto-Heal (optional):</b> <code>systemctl restart</code> über denselben
@@ -361,7 +358,8 @@ selbst fehlschlägt, wird <code>false</code> korrigiert und im nächsten Prüfzy
 <tr><td><code>diag/memory_percent</code></td><td>0–100 (%)</td><td>Nur bei Funktion 5 + RAM-Monitoring aktiv</td></tr>
 <tr><td><code>diag/temp_c</code></td><td>Zahl (°C)</td><td>Nur bei Funktion 5 + Temperatur-Monitoring aktiv UND Sensor lesbar – fehlt das Topic komplett, war kein Sensor auffindbar (z.B. auf mancher virtualisierter Hardware)</td></tr>
 <tr><td><code>diag/internet_ok</code></td><td><code>0</code> / <code>1</code></td><td>Nur bei Funktion 5 + Internet-Monitoring aktiv – TCP-Erreichbarkeit des konfigurierten Prüfziels</td></tr>
-<tr><td><code>diag/time_synced</code></td><td><code>0</code> / <code>1</code></td><td>Nur bei Funktion 5 + Zeit-Monitoring aktiv – laut <code>timedatectl</code> NTP-synchronisiert</td></tr>
+<tr><td><code>diag/time_synced</code></td><td><code>0</code> / <code>1</code></td><td>Nur bei Funktion 5 + Zeit-Monitoring aktiv – Abweichung zum konfigurierten NTP-Server innerhalb der Schwelle</td></tr>
+<tr><td><code>diag/time_offset_s</code></td><td>Sekunden (± Dezimalzahl)</td><td>Nur bei Funktion 5 + Zeit-Monitoring aktiv – exakter gemessener Zeitversatz (positiv = lokale Uhr geht nach)</td></tr>
 </tbody></table>
 <p class="sl-hint">Die Kern-Dienste aus Funktion 5 (<code>SERVICES_LIST</code>) sowie einzelne
 Detailtexte (z.B. <code>gateway_broker_detail</code>, Fehlergründe bei nicht ermittelbaren

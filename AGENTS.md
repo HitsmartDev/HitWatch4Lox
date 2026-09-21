@@ -1,13 +1,12 @@
 ## 📌 Projekt-Status
-- **Version:** 1.9 (2026-09-21: KORREKTUR einer eigenen Fehlannahme aus v1.8 – dort wurde "kein
-  NTP-Client installiert" automatisch als "vermutlich Container mit geteilter Host-Uhr, daher
-  unproblematisch" eingestuft (Ampel grün). Nutzer stellte klar: das betroffene Gerät
-  ("loxberrybs") ist ein ECHTER Raspberry Pi, kein Container – der Proxmox-VM-LoxBerry ist ein
-  anderes Gerät. Auf echter Hardware ohne NTP kann die Zeit tatsächlich über Wochen/Monate
-  driften (kein RTC). Lehre: von innerhalb des Gastsystems lässt sich Container vs. physische
-  Hardware NICHT zuverlässig unterscheiden – "kein NTP-Client installiert" zeigt jetzt wieder
-  eine Warnung (gelb) statt einer stillschweigenden Grün-Annahme, mit erklärendem Hinweistext
-  statt einer festen Interpretation.)
+- **Version:** 2.0 (2026-09-21: Nach v1.4–v1.9 (fünf Runden Zeit-Sync-Diagnose) grundlegende
+  Neuarchitektur auf Nutzerwunsch: "Unser Plugin sollte ja einfach die Uhrzeit mit einem
+  Timeserver vergleichen". `check_time_sync()` fragt jetzt einen NTP-Server DIREKT per eigener
+  minimaler SNTP-Implementierung ab (nur `socket`/`struct`, ein UDP-Paket an Port 123) statt
+  `timedatectl`/`systemd-timesyncd`/`chrony` zu interpretieren – macht die Prüfung komplett
+  unabhängig davon welcher (falls überhaupt ein) NTP-Mechanismus auf dem jeweiligen LoxBerry
+  läuft. Löst damit die gesamte "Container vs. physische Hardware"-Debatte aus v1.8/v1.9
+  ersatzlos auf. Auto-Heal setzt die Zeit jetzt direkt per `ntpdate -u <Server>`.)
   Zeit-Sync meldete "nicht synchronisiert" obwohl die Uhrzeit nachweislich korrekt war. Per SSH
   bestätigt: `timedatectl status` zeigt "NTP service: n/a", `systemd-timesyncd`/`chrony`/`ntp`
   allesamt inaktiv – auf diesem (vermutlich LXC-Container-) Gerät läuft GAR KEIN NTP-Client, die
@@ -304,11 +303,49 @@
   bestätigte, dass "loxberrybs" ein echter Raspberry Pi ist, kein Container (der Proxmox-VM-
   LoxBerry ist ein separates, anderes Gerät). Lehre: Container vs. physische Hardware lässt
   sich von innerhalb des Gastsystems nicht zuverlässig unterscheiden – eine Automatik-Annahme
-  hier war ein Fehler. Siehe v1.9-Eintrag: "kein NTP-Client installiert" zeigt wieder eine
-  Warnung (gelb), keine stille Grün-Annahme mehr. `diag_time_ntp_present` und
-  `_any_ntp_service_installed()` bleiben als Mechanismus bestehen (die Unterscheidung "NTP
-  installiert aber gestört" vs. "NTP gar nicht installiert" ist weiterhin wertvoll für die
-  Fehlermeldung), nur die SCHLUSSFOLGERUNG ("daher unproblematisch") wurde zurückgenommen.
+  hier war ein Fehler. "kein NTP-Client installiert" zeigte danach wieder eine Warnung (gelb),
+  keine stille Grün-Annahme mehr.
+  **🔄 ERSETZT in v2.0:** Der Nutzer bat den LoxBerry per SSH um `crontab -l` +
+  `systemctl show ntpdate.service ...` zu prüfen (siehe v2.0) – Ergebnis: `ntpdate.service`
+  existiert gar nicht (`LoadState=not-found`), kein Cron-Job, kein aktiver Dienst irgendeiner
+  Art. Trotzdem zeigte LoxBerrys eigene "Systemzeit"-Weboberfläche eine funktionierende
+  NTP-Konfiguration (`0.pool.ntp.org`). Schluss: `timedatectl`/systemd-basierte Erkennung ist
+  grundsätzlich der falsche Ansatz für LoxBerry, das seinen eigenen, systemd-unabhängigen
+  `ntpdate`-Mechanismus hat. Der gesamte `_any_ntp_service_installed()`/`diag_time_ntp_present`/
+  "Container vs. Hardware"-Mechanismus aus v1.8/v1.9 wurde in v2.0 komplett durch eine direkte
+  NTP-Abfrage ersetzt (siehe dortiger Eintrag) – diese Altlast ist damit endgültig aufgelöst.
+- **v2.0 – Zeit-Sync-Neuarchitektur: direkte NTP-Abfrage statt systemd-Interpretation
+  (Kernentscheidung des Nutzers nach 5 Diagnose-Runden):** Nutzer formulierte die eigentliche
+  Anforderung explizit: "Unser Plugin sollte ja einfach die Uhrzeit mit einem Timeserver
+  vergleichen, falls es auseinander driftet soll es den Fehler anzeigen oder automatisch die
+  aktuelle Uhrzeit wieder setzen bzw. ntpdate aufrufen mit update". Umsetzung:
+  1. **`_sntp_offset(server, port=123, timeout=5)`:** minimale, selbstgeschriebene SNTP-Abfrage
+     (RFC 4330) nur mit `socket`/`struct` – sendet ein 48-Byte NTP-Request-Paket
+     (`b'\x1b' + 47*b'\0'`, LI=0/VN=3/Mode=3), liest die 48-Byte-Antwort, extrahiert den
+     Transmit-Timestamp (Byte 40-43, Sekunden seit NTP-Epoche 1.1.1900), rechnet auf
+     Unix-Epoche um (`- 2208988800`) und vergleicht mit dem lokalen Zeitpunkt (Mittelwert aus
+     Sende-/Empfangszeit als grobe Round-Trip-Korrektur). Lokal gegen `pool.ntp.org` getestet:
+     Offset im Bereich weniger Zehntelsekunden, `nonexistent.invalid.example` liefert sauber
+     `ok: False` statt einer Exception.
+  2. **`check_time_sync(server, timeout=5)`** ersetzt die komplette alte, `timedatectl`-basierte
+     Funktion (inkl. `_any_ntp_service_installed()`, jetzt entfernt) – liefert `{'ok', 'offset_s',
+     'error'}`.
+  3. Neue Config-Werte: `TIME_NTP_SERVER` (Default `pool.ntp.org`, identisch zu LoxBerrys
+     eigenem "Systemzeit"-Standard), `TIME_MAX_DRIFT_S` (Default 60s – ab welcher Abweichung
+     "nicht synchron" gilt). `TIME_UNSYNCED_MIN` (Mindest-Ausfalldauer vor Auto-Heal, seit v1.5)
+     bleibt unverändert bestehen – jetzt bezogen auf "Abweichung über der Drift-Schwelle" statt
+     "NTPSynchronized=no".
+  4. **`sync_time_now(server)`** setzt die Zeit jetzt DIREKT per `ntpdate -u <server>` (exakt der
+     vom Nutzer gewünschte Weg), Root-Helper-`sync_time`-Unterbefehl nimmt dafür neu ein
+     validiertes Server-Argument entgegen (`sudoers`-Zeile von `sync_time` auf `sync_time *`
+     erweitert, analog zu `restart_service *` – zweite und letzte Wildcard-Ausnahme im Plugin).
+     `ntpdate` priorisiert vor `systemd-timesyncd`-Neustart (umgekehrte Reihenfolge zu v1.4-v1.9),
+     da `ntpdate` universell funktioniert unabhängig davon was sonst installiert ist.
+  5. `compute_health()` vereinfacht: kein Sonderfall mehr für "NTP nicht installiert", einfach
+     `warn.append(f'Zeitabweichung {offset:+.0f}s')` wenn `diag_time_synced is False`.
+  6. Status-Tab zeigt jetzt den exakten Offset in Sekunden (`+2.3s`/`-15.1s`) statt nur
+     synchron/nicht synchron, plus den verwendeten NTP-Server. Neues MQTT-Topic
+     `diag/time_offset_s`.
 - **Noch offen:**
   - [ ] Die neuen Schwellwerte (F1/F4-Mosquitto/F4-Gateway/F5-Internet/F5-Services) sind wie
     Funktion 5 insgesamt nur isoliert getestet (Funktionsebene, `_unhealthy_elapsed_min()` per
@@ -432,10 +469,14 @@
   `subprocess.run`).
 - `link_check` (v0.5) wieder entfernt in v0.6 – ersetzt durch die MQTT-Status-Topics des Gateways
   selbst, kein Root mehr nötig für den Verbindungscheck.
-- `restart_networking` / `sync_time` (Funktion 5 Auto-Heal, seit v1.1): zwei feste, ARGUMENTLOSE
-  Unterbefehle – keine neue Validierungs-Angriffsfläche wie bei `restart_service`, da kein
-  Nutzer-Input entgegengenommen wird. Bewusst auf Dienst-Neustarts beschränkt (kein Interface-
-  Down/Up, kein Dateisystem-Remount).
+- `restart_networking` (Funktion 5 Auto-Heal, seit v1.1): fester, ARGUMENTLOSER Unterbefehl –
+  keine neue Validierungs-Angriffsfläche. Bewusst auf Dienst-Neustarts beschränkt (kein
+  Interface-Down/Up, kein Dateisystem-Remount).
+- `sync_time <ntp-server>` (Funktion 5 Auto-Heal, seit v1.1, seit v2.0 MIT Argument): setzt die
+  Zeit direkt per `ntpdate -u <server>`. Nimmt seit v2.0 den vom Nutzer konfigurierten
+  NTP-Server als validiertes Argument entgegen (`_valid_ntp_server()`, analog zu
+  `_valid_service_name()`) – zweite sudoers-Wildcard-Ausnahme im Plugin neben
+  `restart_service *`.
 
 ### state.json Struktur (DATADIR)
 - `last_check_epoch`, `last_check`, `netbird_connected`, `netbird_management`, `netbird_signal`
@@ -460,11 +501,12 @@
 - `diag_temp_available` (bool), `diag_temp_c`, `diag_temp_level`
 - `diag_internet_ok`, `diag_internet_restart_count`, `diag_internet_last_restart(_epoch)`
 - `diag_time_synced`, `diag_time_restart_count`, `diag_time_last_restart(_epoch)`
+- `diag_time_offset_s` (seit v2.0, Sekunden ± Dezimalzahl – exakter gemessener Zeitversatz zum
+  konfigurierten NTP-Server, `None` wenn Abfrage fehlgeschlagen)
 - `diag_time_unsynced_since_epoch` (seit v1.5, 0 wenn synchron oder nicht beurteilbar – Basis
   für die Persistenz-Schwelle `TIME_UNSYNCED_MIN`)
-- `diag_time_ntp_present` (seit v1.8, bool, default `True` – `False` wenn kein NTP-Client-Dienst
-  auf dem System installiert ist, z.B. typisch für LXC-Container; unterdrückt dann Warnung/
-  Auto-Heal für "nicht synchronisiert")
+- ~~`diag_time_ntp_present`~~ (v1.8-v1.9, in v2.0 entfernt – durch die direkte NTP-Abfrage
+  gegenstandslos geworden)
 - `netbird_unhealthy_since_epoch`, `mosquitto_unhealthy_since_epoch`,
   `gateway_unhealthy_since_epoch`, `diag_internet_unhealthy_since_epoch` (seit v1.6, jeweils 0
   wenn gesund – Basis für die jeweilige `*_UNHEALTHY_MIN`-Schwelle, verwaltet von
@@ -539,6 +581,13 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v2.0 (2026-09-21):** Zeit-Synchronisation grundlegend neu gebaut – statt `timedatectl`/
+  `systemd-timesyncd`/`chrony` zu interpretieren (5 Diagnose-Runden zeigten: unzuverlässig auf
+  LoxBerry), fragt der Daemon jetzt einen NTP-Server DIREKT per eigener minimaler SNTP-Abfrage
+  ab (`_sntp_offset()`, nur `socket`/`struct`) und vergleicht mit der lokalen Zeit. Neue Config
+  `TIME_NTP_SERVER`/`TIME_MAX_DRIFT_S`. Auto-Heal setzt die Zeit direkt per `ntpdate -u
+  <Server>`. Status-Tab zeigt den exakten Offset in Sekunden. Löst die "Container vs. Hardware"-
+  Debatte aus v1.8/v1.9 ersatzlos auf.
 - **v1.9 (2026-09-21):** Korrigiert eine falsche Annahme aus v1.8 – "kein NTP-Client
   installiert" wurde dort automatisch als "vermutlich Container, daher unproblematisch"
   eingestuft (grün). Nutzer bestätigte, dass das betroffene Gerät ein echter Raspberry Pi ist,
