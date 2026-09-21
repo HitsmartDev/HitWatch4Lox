@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '1.7'
+DAEMON_VERSION = '1.8'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None
@@ -645,6 +645,25 @@ def check_cpu_temperature():
         errors.append(f'vcgencmd: {e}')
     return {'ok': False, 'temp_c': None, 'error': '; '.join(errors)[:250]}
 
+def _any_ntp_service_installed():
+    """Prüft ob wenigstens einer der gängigen NTP-Client-Dienste auf diesem System überhaupt
+    als systemd-Unit EXISTIERT (LoadState=loaded – unabhängig davon ob er gerade läuft).
+    Unterscheidet 'kein NTP-Client installiert' (z.B. typisch für LXC-Container, die die
+    Uhrzeit direkt vom Host-Kernel übernehmen und daher gar keinen eigenen NTP-Client
+    brauchen – die Zeit ist trotzdem korrekt) von 'NTP-Client installiert, aber nicht aktiv'
+    (ein echtes, meldenswertes Problem)."""
+    for svc in ('systemd-timesyncd.service', 'chrony.service', 'chronyd.service', 'ntp.service', 'ntpd.service'):
+        try:
+            r = subprocess.run(
+                ['systemctl', 'show', svc, '--property=LoadState', '--no-pager'],
+                capture_output=True, text=True, timeout=5,
+            )
+            if 'LoadState=loaded' in r.stdout:
+                return True
+        except Exception:
+            pass
+    return False
+
 def check_time_sync():
     """Nutzt systemds eigene Sync-Bewertung (timedatectl) statt selbst eine NTP-Abfrage zu
     bauen. Parst 'Key=Value'-Zeilen aus 'timedatectl show' OHNE das --value-Flag (das gibt es
@@ -653,7 +672,14 @@ def check_time_sync():
     'NTPSynchronized' – ein früherer Versuch fragte zusätzlich ein nicht-existentes
     'SystemClockSynchronized' ab; eine einzelne ungültige Property in der Liste ließ
     'timedatectl show' auf manchen Systemen komplett LEER zurückkehren (RC=0, keine Ausgabe)
-    statt nur die gültige Property zu liefern."""
+    statt nur die gültige Property zu liefern.
+
+    Liefert zusätzlich 'ntp_present' – Live-Fund: Auf manchen LoxBerry-Installationen (vermutlich
+    LXC-Container auf Proxmox, die die Uhr vom Host-Kernel übernehmen) läuft GAR KEIN NTP-Client
+    (`timedatectl status` zeigt dort 'NTP service: n/a', RTC 'n/a', alle gängigen NTP-Dienste
+    inaktiv) – die Zeit ist trotzdem korrekt, 'NTPSynchronized=no' ist hier kein echtes Problem.
+    Der Aufrufer kann so zwischen "nicht synchron" (echte Warnung) und "kein NTP-Client
+    vorhanden" (informativ, kein Fehlalarm) unterscheiden."""
     try:
         r = subprocess.run(
             ['timedatectl', 'show', '--property=NTPSynchronized'],
@@ -661,20 +687,22 @@ def check_time_sync():
         )
         for line in r.stdout.splitlines():
             if line.startswith('NTPSynchronized='):
-                return {'ok': True, 'synced': line.split('=', 1)[1].strip().lower() == 'yes'}
+                synced = line.split('=', 1)[1].strip().lower() == 'yes'
+                return {'ok': True, 'synced': synced, 'ntp_present': synced or _any_ntp_service_installed()}
         # Fallback: 'timedatectl status' ist die klassische, textbasierte Ausgabe und liefert
         # auf praktisch jedem System (auch mit eingeschränktem D-Bus-Zugriff, z.B. in manchen
         # LXC-Containern) zumindest die Zeile "System clock synchronized: yes/no".
         r2 = subprocess.run(['timedatectl', 'status'], capture_output=True, text=True, timeout=10)
         m = re.search(r'System clock synchronized:\s*(\w+)', r2.stdout, re.IGNORECASE)
         if m:
-            return {'ok': True, 'synced': m.group(1).strip().lower() == 'yes'}
+            synced = m.group(1).strip().lower() == 'yes'
+            return {'ok': True, 'synced': synced, 'ntp_present': synced or _any_ntp_service_installed()}
         err = (r.stderr or r2.stderr or r2.stdout or f'RC={r.returncode}, keine Ausgabe').strip()[:150]
-        return {'ok': False, 'synced': None, 'error': err}
+        return {'ok': False, 'synced': None, 'ntp_present': True, 'error': err}
     except FileNotFoundError:
-        return {'ok': False, 'synced': None, 'error': 'timedatectl nicht installiert'}
+        return {'ok': False, 'synced': None, 'ntp_present': True, 'error': 'timedatectl nicht installiert'}
     except Exception as e:
-        return {'ok': False, 'synced': None, 'error': str(e)[:120]}
+        return {'ok': False, 'synced': None, 'ntp_present': True, 'error': str(e)[:120]}
 
 def restart_networking():
     rc, out, err = run_helper('restart_networking', timeout=30)
@@ -726,7 +754,7 @@ def compute_health(state):
     if F5_INTERNET_MONITOR and state.get('diag_internet_ok') is False:
         crit.append('Kein Internet')
 
-    if F5_TIME_MONITOR and state.get('diag_time_synced') is False:
+    if F5_TIME_MONITOR and state.get('diag_time_synced') is False and state.get('diag_time_ntp_present', True):
         warn.append('Systemzeit nicht synchronisiert')
 
     if F5_SERVICES_MONITOR:
@@ -977,6 +1005,7 @@ def run():
     # daher nur EINMAL pro Daemon-Lauf geloggt (Diagnose-Zweck), nicht bei jedem F5-Zyklus neu.
     _temp_unavailable_logged = False
     _time_unavailable_logged = False
+    _time_no_ntp_logged = False
 
     log.info(
         f'HitWatch4Lox Daemon gestartet (Version {DAEMON_VERSION}, PID {os.getpid()}) – '
@@ -1276,6 +1305,7 @@ def run():
                 if F5_TIME_MONITOR:
                     ts = check_time_sync()
                     state['diag_time_synced'] = ts.get('synced')
+                    state['diag_time_ntp_present'] = ts.get('ntp_present', True)
                     if not ts['ok']:
                         if not _time_unavailable_logged:
                             log.warning(
@@ -1286,7 +1316,26 @@ def run():
                         state['diag_time_unsynced_since_epoch'] = 0  # nicht beurteilbar, kein Timer
                     else:
                         _time_unavailable_logged = False
-                        if ts['synced'] is False:
+                        if ts['synced'] is False and not ts.get('ntp_present', True):
+                            # Live-Fund: manche LoxBerry-Installationen (vermutlich LXC-Container
+                            # auf Proxmox) haben GAR KEINEN NTP-Client (systemd-timesyncd/chrony/
+                            # ntp allesamt inaktiv, 'timedatectl status' zeigt 'NTP service: n/a').
+                            # Container übernehmen die Uhrzeit direkt vom Host-Kernel – die Zeit
+                            # ist trotzdem korrekt, "nicht synchronisiert" ist hier KEIN echtes
+                            # Problem. Nur einmalig informativ loggen (kein WARNING/Dauerspam),
+                            # keine Ausfalldauer zählen, kein Auto-Heal (ein Neustart eines nicht
+                            # vorhandenen Dienstes würde ohnehin nichts bewirken).
+                            state['diag_time_unsynced_since_epoch'] = 0
+                            if not _time_no_ntp_logged:
+                                log.info(
+                                    'Kein NTP-Client aktiv (systemd-timesyncd/chrony/ntp allesamt '
+                                    'inaktiv) – vermutlich Container, der die Uhrzeit vom Host '
+                                    'übernimmt. "Nicht synchronisiert" wird hier nicht als Problem '
+                                    'gewertet.'
+                                )
+                                _time_no_ntp_logged = True
+                        elif ts['synced'] is False:
+                            _time_no_ntp_logged = False
                             # systemd-timesyncd ist ein dauerhaft laufender Dienst, der von sich aus
                             # periodisch erneut versucht zu synchronisieren – ein kurzer Ausschlag
                             # (z.B. direkt nach einem Neustart, oder ein kurzer Netz-Hänger) löst
@@ -1319,6 +1368,7 @@ def run():
                                        if F5_TIME_AUTOHEAL else ' – Auto-Heal deaktiviert, kein Eingriff.')
                                 )
                         else:
+                            _time_no_ntp_logged = False
                             state['diag_time_unsynced_since_epoch'] = 0
 
                 if F5_SERVICES_MONITOR and F5_SERVICES_LIST:

@@ -1,5 +1,13 @@
 ## 📌 Projekt-Status
-- **Version:** 1.7 (2026-09-21: KRITISCHER Live-Fund auf einem ZWEITEN Test-LoxBerry –
+- **Version:** 1.8 (2026-09-21: Weiterer Live-Fund auf demselben Zweitgerät ("loxberrybs") –
+  Zeit-Sync meldete "nicht synchronisiert" obwohl die Uhrzeit nachweislich korrekt war. Per SSH
+  bestätigt: `timedatectl status` zeigt "NTP service: n/a", `systemd-timesyncd`/`chrony`/`ntp`
+  allesamt inaktiv – auf diesem (vermutlich LXC-Container-) Gerät läuft GAR KEIN NTP-Client, die
+  Zeit kommt direkt vom Host-Kernel. `check_time_sync()` erkennt das jetzt (prüft zusätzlich ob
+  überhaupt ein NTP-Client-Dienst installiert ist) und behandelt "kein NTP-Client vorhanden"
+  als "nicht zutreffend" statt als Warnung – kein Fehlalarm mehr, kein sinnloser Auto-Heal-
+  Neustart eines nicht existenten Dienstes.)
+  Basiert auf v1.7 (2026-09-21): KRITISCHER Live-Fund auf einem ZWEITEN Test-LoxBerry –
   "Verbindung zu Mosquitto" zeigte dauerhaft "nicht verbunden"/"Herzschlag veraltet" trotz
   laufendem Gateway-Prozess. Root Cause: `GATEWAY_MQTT_PREFIX` war fix auf den literalen String
   "loxberry" verdrahtet, funktionierte am ERSTEN Testgerät nur weil dessen Hostname zufällig noch
@@ -263,6 +271,27 @@
   UND app_status.php) – Default-Zeile aus `hitwatch4lox.cfg.default` entfernt, damit der
   dynamische Fallback greift statt eines festen Werts. Status-Tab zeigt jetzt zusätzlich den
   effektiv verwendeten Präfix UND `gateway_broker_detail` (vorher nur im Log sichtbar).
+- **v1.8 – Zeit-Sync-Fehlalarm auf Containern ohne eigenen NTP-Client (dritter Live-Fund am
+  selben Zweitgerät):** Nach dem Präfix-Fix (v1.7) meldete das Gerät weiterhin
+  "Systemzeit ... nicht synchronisiert (NTP)" im Log, obwohl der Nutzer bestätigte dass die
+  Uhrzeit korrekt ist. Statt zu raten, gezielt per SSH nachgefragt: `timedatectl status` +
+  `systemctl is-active systemd-timesyncd chrony ntp`. Ergebnis: "NTP service: n/a", "RTC time:
+  n/a", alle drei NTP-Dienste inaktiv – auf diesem LoxBerry läuft überhaupt kein NTP-Client.
+  Plausibelste Erklärung: LXC-Container (passt zum Proxmox-Stack des Nutzers) übernehmen die
+  Systemzeit 1:1 vom Host-Kernel und brauchen daher keinen eigenen NTP-Client – anders als eine
+  vollwertige VM oder physische Hardware. `timedatectl`s `NTPSynchronized`-Property kennt diesen
+  Fall nicht und meldet pauschal "nicht synchronisiert", was hier aber kein echtes Problem ist.
+  Fix: neue Helper-Funktion `_any_ntp_service_installed()` prüft per `systemctl show <svc>
+  --property=LoadState` (nicht ActiveState – es geht um "existiert die Unit", nicht "läuft
+  sie gerade") ob `systemd-timesyncd.service`/`chrony.service`/`chronyd.service`/`ntp.service`/
+  `ntpd.service` überhaupt vorhanden sind. `check_time_sync()` liefert das Ergebnis als
+  `ntp_present` mit zurück. Ist kein NTP-Client vorhanden UND die Zeit "nicht synchronisiert":
+  neuer State-Key `diag_time_ntp_present` (default `True`, konservativ), `compute_health()`
+  ignoriert diesen Fall (kein `warn`-Eintrag mehr), Log nur noch einmalig auf INFO-Ebene statt
+  WARNING bei jedem Zyklus, kein Auto-Heal-Versuch (Neustart eines nicht existenten Dienstes
+  wäre wirkungslos). Status-Tab zeigt neu "nicht zutreffend (kein NTP-Client – vermutlich
+  Container)" als eigenen, neutralen dritten Zustand neben "synchronisiert"/"nicht
+  synchronisiert"/"nicht ermittelbar".
 - **Noch offen:**
   - [ ] Die neuen Schwellwerte (F1/F4-Mosquitto/F4-Gateway/F5-Internet/F5-Services) sind wie
     Funktion 5 insgesamt nur isoliert getestet (Funktionsebene, `_unhealthy_elapsed_min()` per
@@ -416,6 +445,9 @@
 - `diag_time_synced`, `diag_time_restart_count`, `diag_time_last_restart(_epoch)`
 - `diag_time_unsynced_since_epoch` (seit v1.5, 0 wenn synchron oder nicht beurteilbar – Basis
   für die Persistenz-Schwelle `TIME_UNSYNCED_MIN`)
+- `diag_time_ntp_present` (seit v1.8, bool, default `True` – `False` wenn kein NTP-Client-Dienst
+  auf dem System installiert ist, z.B. typisch für LXC-Container; unterdrückt dann Warnung/
+  Auto-Heal für "nicht synchronisiert")
 - `netbird_unhealthy_since_epoch`, `mosquitto_unhealthy_since_epoch`,
   `gateway_unhealthy_since_epoch`, `diag_internet_unhealthy_since_epoch` (seit v1.6, jeweils 0
   wenn gesund – Basis für die jeweilige `*_UNHEALTHY_MIN`-Schwelle, verwaltet von
@@ -490,6 +522,11 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v1.8 (2026-09-21):** Zeit-Sync-Prüfung meldete Fehlalarm auf Systemen ohne eigenen
+  NTP-Client (z.B. LXC-Container, die die Uhrzeit vom Host-Kernel übernehmen). Neue
+  `_any_ntp_service_installed()`-Prüfung erkennt diesen Fall – "nicht synchronisiert" wird dann
+  nicht mehr als Warnung behandelt, weder in Health-Ampel noch Log noch Auto-Heal. Status-Tab
+  zeigt neu "nicht zutreffend (kein NTP-Client – vermutlich Container)".
 - **v1.7 (2026-09-21):** MQTT-Gateway-Status-Präfix war seit v0.6 fix auf den literalen String
   "loxberry" verdrahtet – funktionierte nur zufällig, weil das erste Testgerät noch diesen
   Werks-Hostnamen trug. Auf einem zweiten Gerät (Hostname "loxberrybs") zeigte sich: das Gateway

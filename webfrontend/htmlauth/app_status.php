@@ -417,13 +417,15 @@ render_header('app_status');
 <?php endif; ?>
 <?php if ($f5_time_monitor):
     $ts = $state['diag_time_synced'] ?? null;
+    $ts_ntp_present = (bool)($state['diag_time_ntp_present'] ?? true);
     $ts_since = (int)($state['diag_time_unsynced_since_epoch'] ?? 0);
     $ts_unsynced_min = $ts_since > 0 ? round((time() - $ts_since) / 60) : 0;
+    $ts_no_ntp = ($ts === false && !$ts_ntp_present);
 ?>
         <ul class="sl-info-list">
             <li><span class="sl-info-key">🕒 Zeit-Synchronisation</span>
-                <span class="sl-info-val <?= $ts === false ? 'warn' : ($ts === true ? 'ok' : '') ?>">
-                    <?= $ts === true ? 'synchronisiert' : ($ts === false ? "nicht synchronisiert seit {$ts_unsynced_min} min" : 'nicht ermittelbar') ?></span></li>
+                <span class="sl-info-val <?= $ts_no_ntp ? '' : ($ts === false ? 'warn' : ($ts === true ? 'ok' : '')) ?>">
+                    <?= $ts === true ? 'synchronisiert' : ($ts_no_ntp ? 'nicht zutreffend (kein NTP-Client – vermutlich Container)' : ($ts === false ? "nicht synchronisiert seit {$ts_unsynced_min} min" : 'nicht ermittelbar')) ?></span></li>
             <li><span class="sl-info-key">Auto-Heal</span>
                 <span class="sl-info-val" style="color:<?= $f5_time_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f5_time_autoheal, $f5_time_unsynced_min)) ?></span></li>
         </ul>

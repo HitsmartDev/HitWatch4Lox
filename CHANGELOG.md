@@ -5,6 +5,28 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [1.8] – 2026-09-21
+
+### Behoben – Zeit-Sync meldete Fehlalarm auf Systemen ohne eigenen NTP-Client (Live-Fund)
+- Auf einem LoxBerry (vermutlich LXC-Container auf Proxmox) meldete die Zeit-Synchronisations-
+  Prüfung dauerhaft "nicht synchronisiert", obwohl die Systemzeit nachweislich korrekt war.
+  Diagnose per SSH: `timedatectl status` zeigte "NTP service: n/a", und `systemd-timesyncd`,
+  `chrony` sowie `ntp` waren allesamt inaktiv – auf diesem Gerät läuft gar kein NTP-Client.
+- **Root Cause:** Container (insbesondere LXC) übernehmen die Systemzeit direkt vom
+  Host-Kernel und benötigen daher grundsätzlich keinen eigenen NTP-Client – die Zeit ist
+  trotzdem korrekt. `timedatectl`s `NTPSynchronized`-Flag bewertet aber nur ob ein NTP-Client
+  aktiv synchronisiert hat, kennt diesen Fall also nicht und meldet fälschlich "nicht
+  synchronisiert".
+- **Fix:** `check_time_sync()` prüft jetzt zusätzlich ob überhaupt einer der gängigen
+  NTP-Client-Dienste (`systemd-timesyncd`, `chrony`, `ntp`) als systemd-Unit installiert ist
+  (`_any_ntp_service_installed()`). Ist keiner vorhanden, wird "nicht synchronisiert" nicht
+  mehr als Warnung behandelt – weder in der Health-Ampel noch im Log (nur noch einmalig
+  informativ) – und Auto-Heal versucht keinen sinnlosen Neustart eines nicht vorhandenen
+  Dienstes mehr. Status-Tab zeigt in diesem Fall "nicht zutreffend (kein NTP-Client –
+  vermutlich Container)" statt einer roten/gelben Warnung.
+
+---
+
 ## [1.7] – 2026-09-21
 
 ### Behoben – MQTT-Gateway-Status-Präfix war fix auf "loxberry" verdrahtet (Live-Fund, KRITISCH)
