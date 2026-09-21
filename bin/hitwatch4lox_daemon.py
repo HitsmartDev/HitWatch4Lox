@@ -1,5 +1,5 @@
 """HitWatch4Lox Daemon – Netbird- und MQTT-Dienste-Watchdog für LoxBerry"""
-DAEMON_VERSION = '2.0'
+DAEMON_VERSION = '2.1'
 import os, sys, re, json, time, logging, configparser, signal, subprocess, glob, socket, shutil, struct, traceback
 try: import fcntl  # Exklusiv-Lock – nur auf Linux/LoxBerry verfügbar
 except ImportError: fcntl = None

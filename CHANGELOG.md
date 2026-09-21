@@ -5,6 +5,29 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [2.1] – 2026-09-21
+
+### Geändert – Status- und Einstellungsseite kompakter, weniger Scrollen
+- Auf Nutzerwunsch: beide Seiten zeigen jetzt deutlich mehr auf einen Blick statt einer langen
+  Liste von Karten untereinander.
+- **Status-Tab:** Die Übersichtskarten (Netbird-Status, Watchdog-Aktionen, Letzte Aktionen,
+  Funktionen-Übersicht) stehen jetzt in einem responsiven Grid nebeneinander (2-3 Spalten je
+  nach Bildschirmbreite, automatisch 1 Spalte auf schmalen Bildschirmen/iframes). MQTT-Dienste-
+  Status und System-Diagnose (beide inhaltlich umfangreicher) bilden eine zweite Grid-Zeile.
+  Innerhalb der Karten stehen Mosquitto/Gateway sowie die einzelnen Diagnose-Checks (Speicher/
+  RAM/Temperatur, Internet/Zeit) ebenfalls nebeneinander statt untereinander.
+- **Einstellungen:** Funktion 1 + Funktion 2 stehen nebeneinander (Funktion 2 hängt ohnehin von
+  Funktion 1 ab). Innerhalb der Karten sind zusammengehörige Felder (Warnung/Kritisch-Schwellen,
+  Host/Port, Uhrzeit/Frequenz, Dienstname/Host/Port, Broker/Port, Benutzername/Passwort) jetzt
+  nebeneinander statt als lange vertikale Liste.
+- Neue CSS-Bausteine `.sl-grid` (mehrere Karten nebeneinander, automatische Spaltenanzahl) und
+  `.sl-subgrid`/`.sl-subgrid-tight` (Inhalte innerhalb einer Karte nebeneinander) – beide
+  kollabieren automatisch auf 1 Spalte wenn der verfügbare Platz nicht reicht, keine feste
+  Spaltenzahl. `.sl-main`-Breite von 900px auf 1200px erhöht, damit auf breiten Bildschirmen
+  Platz für die zusätzlichen Spalten entsteht (wirkt sich nicht negativ auf schmale Ansichten aus).
+
+---
+
 ## [2.0] – 2026-09-21
 
 ### Geändert – Zeit-Synchronisation: direkte NTP-Abfrage statt systemd-Interpretation (Neuarchitektur)

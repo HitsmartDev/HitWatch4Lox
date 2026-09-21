@@ -193,8 +193,11 @@ render_header('app_status');
 </div>
 
 <!-- ================================================================
-     NETBIRD-STATUS
+     ÜBERSICHTSKARTEN (nebeneinander statt untereinander)
      ================================================================ -->
+<div class="sl-grid">
+
+<!-- NETBIRD-STATUS -->
 <div class="sl-card">
     <div class="sl-card-head">
         <span class="sl-card-head-title">🐦 <?= h($L['MAIN.NETBIRD_STATUS'] ?? 'Netbird-Status') ?></span>
@@ -232,9 +235,7 @@ render_header('app_status');
     </div>
 </div>
 
-<!-- ================================================================
-     WATCHDOG-AKTIONEN
-     ================================================================ -->
+<!-- WATCHDOG-AKTIONEN -->
 <div class="sl-card">
     <div class="sl-card-head">
         <span class="sl-card-head-title">🔁 <?= h($L['MAIN.WATCHDOG_ACTIONS'] ?? 'Watchdog-Aktionen') ?></span>
@@ -257,9 +258,7 @@ render_header('app_status');
     </div>
 </div>
 
-<!-- ================================================================
-     LETZTE AKTIONEN
-     ================================================================ -->
+<!-- LETZTE AKTIONEN -->
 <div class="sl-card">
     <div class="sl-card-head">
         <span class="sl-card-head-title">📋 Letzte Aktionen</span>
@@ -269,7 +268,7 @@ render_header('app_status');
         <p class="sl-hint">Noch keine Aktionen protokolliert.</p>
 <?php else: ?>
         <ul class="sl-info-list">
-<?php foreach (array_slice($action_log, 0, 8) as $entry):
+<?php foreach (array_slice($action_log, 0, 6) as $entry):
     [$_aic, $_alb] = hw4l_action_label($entry['action'] ?? '');
     $_asuccess = (bool)($entry['success'] ?? true);
     $_atime = $entry['time'] ?? '–';
@@ -282,16 +281,57 @@ render_header('app_status');
 <?php endforeach; ?>
         </ul>
         <p class="sl-hint" style="margin-top:0.6rem;text-align:right">
-            <a href="app_log.php" style="color:inherit;font-weight:700">→ Vollständige Aktions-Historie ansehen</a>
+            <a href="app_log.php" style="color:inherit;font-weight:700">→ Vollständige Historie</a>
         </p>
 <?php endif; ?>
     </div>
 </div>
 
+<!-- FUNKTIONEN-ÜBERSICHT -->
+<div class="sl-card">
+    <div class="sl-card-head">
+        <span class="sl-card-head-title">⚙️ <?= h($L['MAIN.FUNCTIONS_OVERVIEW'] ?? 'Funktionen-Übersicht') ?></span>
+    </div>
+    <div class="sl-card-body">
+        <div class="sl-stat-grid">
+            <div class="sl-stat">
+                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f1_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f1_enabled ? 'An' : 'Aus' ?></div>
+                <div class="sl-stat-lbl">F1 – Watchdog</div>
+            </div>
+            <div class="sl-stat">
+                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f2_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f2_enabled ? 'An' : 'Aus' ?></div>
+                <div class="sl-stat-lbl">F2 – Reboot-Esk.</div>
+            </div>
+            <div class="sl-stat">
+                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f3_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f3_enabled ? 'An' : 'Aus' ?></div>
+                <div class="sl-stat-lbl">F3 – Auto-Reboot</div>
+            </div>
+            <div class="sl-stat">
+                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f4_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_enabled ? 'An' : 'Aus' ?></div>
+                <div class="sl-stat-lbl">F4 – MQTT</div>
+            </div>
+            <div class="sl-stat">
+                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f5_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_enabled ? 'An' : 'Aus' ?></div>
+                <div class="sl-stat-lbl">F5 – Diagnose</div>
+            </div>
+        </div>
+        <?php if ($f3_enabled):
+            $f3_day_labels = array_map(fn($w) => $weekday_names[(int)$w] ?? '?', $f3_weekdays);
+        ?>
+        <p class="sl-hint">Automatischer Reboot: <b><?= h(implode(', ', $f3_day_labels)) ?></b> um <b><?= h($f3_time) ?></b> Uhr
+            (<?= $f3_every_n <= 1 ? 'jedes Mal' : 'nur alle ' . $f3_every_n . 'x' ?>).</p>
+        <?php endif; ?>
+        <a href="app_settings.php" class="sl-btn secondary sm">⚙️ Zu den Einstellungen</a>
+    </div>
+</div>
+
+</div><!-- /.sl-grid -->
+
+<?php if ($f4_enabled || $f5_enabled): ?>
+<div class="sl-grid sl-grid-wide">
+
 <?php if ($f4_enabled): ?>
-<!-- ================================================================
-     MQTT-DIENSTE-STATUS
-     ================================================================ -->
+<!-- MQTT-DIENSTE-STATUS -->
 <div class="sl-card">
     <div class="sl-card-head">
         <span class="sl-card-head-title">📡 MQTT-Dienste-Status</span>
@@ -320,16 +360,20 @@ render_header('app_status');
                 <span class="sl-info-val <?= $f4_is_stale ? 'alert' : '' ?>"><?= h($f4_last_check) ?></span></li>
             <li><span class="sl-info-key">Prüfintervall</span> <span class="sl-info-val"><?= $f4_check_interval ?> s</span></li>
         </ul>
+        <div class="sl-subgrid">
+        <div>
         <div class="sl-section-title">🦟 Mosquitto (<?= h($f4_mosq_service) ?>)</div>
         <ul class="sl-info-list">
             <li><span class="sl-info-key">Dienststatus</span>
                 <span class="sl-info-val <?= $m_healthy ? 'ok' : 'alert' ?>"><?= h($m_active) ?><?= $m_sub ? ' / ' . h($m_sub) : '' ?></span></li>
             <li><span class="sl-info-key">TCP-Erreichbarkeit</span>
                 <span class="sl-info-val <?= $m_tcp ? 'ok' : 'alert' ?>"><?= $m_tcp ? 'erreichbar' : 'nicht erreichbar' ?></span></li>
-            <li><span class="sl-info-key">Automatischer Neustart</span>
+            <li><span class="sl-info-key">Auto-Neustart</span>
                 <span class="sl-info-val" style="color:<?= $f4_mosq_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f4_mosq_autorestart, $f4_mosq_unhealthy_min)) ?></span></li>
             <li><span class="sl-info-key">Neustarts gesamt</span> <span class="sl-info-val"><?= $m_restarts ?></span></li>
         </ul>
+        </div>
+        <div>
         <div class="sl-section-title">📡 MQTT-Gateway (<?= h($f4_gw_pattern) ?>)</div>
         <ul class="sl-info-list">
             <li><span class="sl-info-key">Prozess</span>
@@ -338,25 +382,23 @@ render_header('app_status');
                 <span class="sl-info-val <?= $g_checked ? ($g_linked ? 'ok' : 'alert') : '' ?>">
                     <?= $g_checked ? ($g_linked ? 'verbunden' : 'nicht verbunden') : 'nicht prüfbar' ?><?php if ($g_detail): ?><br><span style="font-size:0.72rem;color:var(--muted)"><?= h($g_detail) ?></span><?php endif; ?>
                 </span></li>
-            <li><span class="sl-info-key">MQTT-Status-Topic-Präfix</span>
-                <span class="sl-info-val" style="font-size:0.82rem"><code><?= h($f4_gw_prefix) ?></code></span></li>
-            <li><span class="sl-info-key">Automatischer Neustart</span>
+            <li><span class="sl-info-key">Topic-Präfix</span>
+                <span class="sl-info-val" style="font-size:0.78rem"><code><?= h($f4_gw_prefix) ?></code></span></li>
+            <li><span class="sl-info-key">Auto-Neustart</span>
                 <span class="sl-info-val" style="color:<?= $f4_gw_autorestart ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f4_gw_autorestart, $f4_gw_unhealthy_min)) ?></span></li>
             <li><span class="sl-info-key">Neustarts gesamt</span> <span class="sl-info-val"><?= $g_restarts ?></span></li>
         </ul>
-        <p class="sl-hint" style="margin-top:0.5rem">Mosquitto-Dienststatus direkt von <code>systemctl show</code> (ActiveState / SubState) –
-            "activating" bedeutet der Dienst startet gerade. Das MQTT-Gateway ist kein systemd-Dienst
-            (LoxBerry-Kern-Daemon) – Prozess-Erkennung über <code>pgrep</code>, die Verbindung zu
-            Mosquitto liest den vom Gateway selbst veröffentlichten MQTT-Status
-            (<code>&lt;Präfix&gt;/status</code>). Rein informativ – löst selbst keinen Neustart aus.</p>
+        </div>
+        </div>
+        <p class="sl-hint" style="margin-top:0.5rem">Mosquitto-Dienststatus direkt von <code>systemctl show</code>. Das MQTT-Gateway ist
+            kein systemd-Dienst – Prozess-Erkennung über <code>pgrep</code>, die Verbindung zu Mosquitto liest den
+            vom Gateway selbst veröffentlichten MQTT-Status. Rein informativ – löst selbst keinen Neustart aus.</p>
     </div>
 </div>
 <?php endif; ?>
 
 <?php if ($f5_enabled): ?>
-<!-- ================================================================
-     SYSTEM-DIAGNOSE
-     ================================================================ -->
+<!-- SYSTEM-DIAGNOSE -->
 <div class="sl-card">
     <div class="sl-card-head">
         <span class="sl-card-head-title">🩺 System-Diagnose</span>
@@ -373,14 +415,16 @@ render_header('app_status');
                 <span class="sl-info-val <?= $diag_is_stale ? 'alert' : '' ?>"><?= h($diag_last_check) ?></span></li>
             <li><span class="sl-info-key">Prüfintervall</span> <span class="sl-info-val"><?= $f5_check_interval ?> s</span></li>
         </ul>
+<?php if ($f5_disk_monitor || $f5_memory_monitor || $f5_temp_monitor): ?>
+        <div class="sl-subgrid sl-subgrid-tight">
 <?php if ($f5_disk_monitor):
     $d_pct = $state['diag_disk_percent'] ?? null;
     $d_lvl = $state['diag_disk_level'] ?? 'unknown';
 ?>
         <ul class="sl-info-list">
-            <li><span class="sl-info-key">💾 Speicherplatz (/)</span>
+            <li><span class="sl-info-key">💾 Speicher</span>
                 <span class="sl-info-val <?= $d_lvl === 'crit' ? 'alert' : ($d_lvl === 'warn' ? 'warn' : '') ?>">
-                    <?= $d_pct !== null ? h($d_pct) . '% belegt' : 'nicht ermittelbar' ?></span></li>
+                    <?= $d_pct !== null ? h($d_pct) . '%' : '?' ?></span></li>
         </ul>
 <?php endif; ?>
 <?php if ($f5_memory_monitor):
@@ -388,9 +432,9 @@ render_header('app_status');
     $m_lvl = $state['diag_memory_level'] ?? 'unknown';
 ?>
         <ul class="sl-info-list">
-            <li><span class="sl-info-key">🧠 RAM-Auslastung</span>
+            <li><span class="sl-info-key">🧠 RAM</span>
                 <span class="sl-info-val <?= $m_lvl === 'warn' ? 'warn' : '' ?>">
-                    <?= $m_pct !== null ? h($m_pct) . '%' : 'nicht ermittelbar' ?></span></li>
+                    <?= $m_pct !== null ? h($m_pct) . '%' : '?' ?></span></li>
         </ul>
 <?php endif; ?>
 <?php if ($f5_temp_monitor):
@@ -399,22 +443,29 @@ render_header('app_status');
     $t_avail = (bool)($state['diag_temp_available'] ?? false);
 ?>
         <ul class="sl-info-list">
-            <li><span class="sl-info-key">🌡️ CPU-Temperatur</span>
+            <li><span class="sl-info-key">🌡️ Temp.</span>
                 <span class="sl-info-val <?= $t_lvl === 'crit' ? 'alert' : ($t_lvl === 'warn' ? 'warn' : '') ?>">
-                    <?= $t_avail && $t_c !== null ? h($t_c) . '°C' : 'nicht ermittelbar' ?></span></li>
+                    <?= $t_avail && $t_c !== null ? h($t_c) . '°C' : '?' ?></span></li>
         </ul>
 <?php endif; ?>
+        </div>
+<?php endif; ?>
+<?php if ($f5_internet_monitor || $f5_time_monitor): ?>
+        <div class="sl-subgrid">
 <?php if ($f5_internet_monitor):
     $i_ok = (bool)($state['diag_internet_ok'] ?? true);
     $i_since = (int)($state['diag_internet_unhealthy_since_epoch'] ?? 0);
     $i_unhealthy_min = $i_since > 0 ? round((time() - $i_since) / 60) : 0;
 ?>
+        <div>
+        <div class="sl-section-title">🌐 Internet</div>
         <ul class="sl-info-list">
-            <li><span class="sl-info-key">🌐 Internet-Erreichbarkeit</span>
-                <span class="sl-info-val <?= $i_ok ? 'ok' : 'alert' ?>"><?= $i_ok ? 'erreichbar' : "nicht erreichbar seit {$i_unhealthy_min} min" ?></span></li>
+            <li><span class="sl-info-key">Status</span>
+                <span class="sl-info-val <?= $i_ok ? 'ok' : 'alert' ?>"><?= $i_ok ? 'erreichbar' : "seit {$i_unhealthy_min} min nicht erreichbar" ?></span></li>
             <li><span class="sl-info-key">Auto-Heal</span>
                 <span class="sl-info-val" style="color:<?= $f5_internet_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f5_internet_autoheal, $f5_internet_unhealthy_min)) ?></span></li>
         </ul>
+        </div>
 <?php endif; ?>
 <?php if ($f5_time_monitor):
     $ts = $state['diag_time_synced'] ?? null;
@@ -422,22 +473,25 @@ render_header('app_status');
     $ts_since = (int)($state['diag_time_unsynced_since_epoch'] ?? 0);
     $ts_unsynced_min = $ts_since > 0 ? round((time() - $ts_since) / 60) : 0;
 ?>
+        <div>
+        <div class="sl-section-title">🕒 Zeit (<?= h($f5_ntp_server) ?>)</div>
         <ul class="sl-info-list">
-            <li><span class="sl-info-key">🕒 Zeit-Synchronisation</span>
+            <li><span class="sl-info-key">Status</span>
                 <span class="sl-info-val <?= $ts === false ? 'warn' : ($ts === true ? 'ok' : '') ?>">
                     <?php if ($ts === true): ?>
                         synchron (<?= h(sprintf('%+.1f', $ts_offset)) ?>s)
                     <?php elseif ($ts === false): ?>
-                        Abweichung <?= h(sprintf('%+.1f', $ts_offset)) ?>s seit <?= $ts_unsynced_min ?> min
+                        <?= h(sprintf('%+.1f', $ts_offset)) ?>s seit <?= $ts_unsynced_min ?> min
                     <?php else: ?>
                         nicht ermittelbar
                     <?php endif; ?>
                 </span></li>
-            <li><span class="sl-info-key">NTP-Server</span>
-                <span class="sl-info-val"><code><?= h($f5_ntp_server) ?></code></span></li>
             <li><span class="sl-info-key">Auto-Heal</span>
                 <span class="sl-info-val" style="color:<?= $f5_time_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= h(hw4l_autoheal_label($f5_time_autoheal, $f5_time_unsynced_min)) ?></span></li>
         </ul>
+        </div>
+<?php endif; ?>
+        </div>
 <?php endif; ?>
 <?php if ($f5_services_monitor && $f5_services_list):
     $diag_services = $state['diag_services'] ?? [];
@@ -454,52 +508,14 @@ render_header('app_status');
         </ul>
         <p class="sl-hint">Auto-Heal für diese Dienste: <b style="color:<?= $f5_services_autoheal ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_services_autoheal ? 'An' : 'Aus' ?></b></p>
 <?php endif; ?>
-        <p class="sl-hint" style="margin-top:0.5rem">Reine Vor-Ort-Diagnose – erkennt typische Ursachen für einen
-            Techniker-Einsatz (volle SD-Karte, kein Internet, Zeitabweichung, …). Auto-Heal ist bewusst auf
+        <p class="sl-hint" style="margin-top:0.5rem">Reine Vor-Ort-Diagnose. Auto-Heal ist bewusst auf
             Dienst-/Netzwerk-Neustarts beschränkt, siehe Einstellungen.</p>
     </div>
 </div>
 <?php endif; ?>
 
-<!-- ================================================================
-     FUNKTIONEN-ÜBERSICHT
-     ================================================================ -->
-<div class="sl-card">
-    <div class="sl-card-head">
-        <span class="sl-card-head-title">⚙️ <?= h($L['MAIN.FUNCTIONS_OVERVIEW'] ?? 'Funktionen-Übersicht') ?></span>
-    </div>
-    <div class="sl-card-body">
-        <div class="sl-stat-grid">
-            <div class="sl-stat">
-                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f1_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f1_enabled ? 'An' : 'Aus' ?></div>
-                <div class="sl-stat-lbl">F1 – Dienst-Watchdog</div>
-            </div>
-            <div class="sl-stat">
-                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f2_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f2_enabled ? 'An' : 'Aus' ?></div>
-                <div class="sl-stat-lbl">F2 – Reboot-Eskalation</div>
-            </div>
-            <div class="sl-stat">
-                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f3_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f3_enabled ? 'An' : 'Aus' ?></div>
-                <div class="sl-stat-lbl">F3 – Automatischer Reboot</div>
-            </div>
-            <div class="sl-stat">
-                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f4_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f4_enabled ? 'An' : 'Aus' ?></div>
-                <div class="sl-stat-lbl">F4 – MQTT-Watchdog</div>
-            </div>
-            <div class="sl-stat">
-                <div class="sl-stat-val" style="font-size:0.95rem;color:<?= $f5_enabled ? 'var(--green)' : 'var(--muted)' ?>"><?= $f5_enabled ? 'An' : 'Aus' ?></div>
-                <div class="sl-stat-lbl">F5 – System-Diagnose</div>
-            </div>
-        </div>
-        <?php if ($f3_enabled):
-            $f3_day_labels = array_map(fn($w) => $weekday_names[(int)$w] ?? '?', $f3_weekdays);
-        ?>
-        <p class="sl-hint">Automatischer Reboot: <b><?= h(implode(', ', $f3_day_labels)) ?></b> um <b><?= h($f3_time) ?></b> Uhr
-            (<?= $f3_every_n <= 1 ? 'jedes Mal' : 'nur alle ' . $f3_every_n . 'x' ?>).</p>
-        <?php endif; ?>
-        <a href="app_settings.php" class="sl-btn secondary sm">⚙️ Zu den Einstellungen</a>
-    </div>
-</div>
+</div><!-- /.sl-grid.sl-grid-wide -->
+<?php endif; ?>
 
 <!-- Auto-Refresh Statuszeile -->
 <p class="sl-hint" style="text-align:center;margin-top:0.5rem">

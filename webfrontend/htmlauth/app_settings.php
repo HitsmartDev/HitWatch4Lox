@@ -212,6 +212,8 @@ render_header('app_settings');
 <form method="POST" class="sl-form">
 <input type="hidden" name="csrf" value="<?= h(hw4l_csrf()) ?>">
 
+<div class="sl-grid">
+
 <!-- ================================================================
      FUNKTION 1 – DIENST-WATCHDOG
      ================================================================ -->
@@ -229,6 +231,7 @@ render_header('app_settings');
             <p class="sl-hint">Prüft periodisch ob Netbird tatsächlich verbunden ist (nicht nur ob der Dienst
                 läuft) und startet den Dienst bei Bedarf einmalig neu. Kein Loop – nur ein Versuch pro Zyklus.</p>
         </div>
+        <div class="sl-subgrid">
         <div class="sl-slider-row">
             <label>Prüfintervall <span class="sl-slider-val" id="sci"><?= cv('WATCHDOG','CHECK_INTERVAL','300') ?></span> s</label>
             <input type="range" name="check_interval" min="60" max="1800" step="30"
@@ -240,16 +243,16 @@ render_header('app_settings');
             <input type="range" name="restart_wait_seconds" min="5" max="60" step="5"
                    value="<?= cv('WATCHDOG','RESTART_WAIT_SECONDS','20') ?>"
                    oninput="document.getElementById('srw').textContent=this.value">
-            <p class="sl-hint">Wie lange nach <code>systemctl restart netbird</code> gewartet wird, bevor der Status erneut geprüft wird.</p>
+        </div>
         </div>
         <div class="sl-slider-row">
             <label>Erst neu starten wenn durchgehend nicht verbunden seit <span class="sl-slider-val" id="sf1um"><?= cv('WATCHDOG','UNHEALTHY_MIN','0') ?></span> min</label>
             <input type="range" name="f1_unhealthy_min" min="0" max="30" step="1"
                    value="<?= cv('WATCHDOG','UNHEALTHY_MIN','0') ?>"
                    oninput="document.getElementById('sf1um').textContent=this.value">
-            <p class="sl-hint">Standard 0 = sofort beim ersten fehlgeschlagenen Check (Netbird hat kein
-                automatisches Reconnect – ein Warten hilft hier meist nicht). Nur erhöhen wenn du bewusst
-                kurze Aussetzer tolerieren willst, bevor der Dienst neu gestartet wird.</p>
+            <p class="sl-hint">Wartezeit: wie lange nach <code>systemctl restart netbird</code> bis zur erneuten Prüfung.
+                Mindest-Ausfalldauer: Standard 0 = sofort (Netbird hat kein automatisches Reconnect – Warten
+                hilft hier meist nicht), nur erhöhen für bewusst tolerierte kurze Aussetzer.</p>
         </div>
     </div>
 </div>
@@ -284,6 +287,8 @@ render_header('app_settings');
     </div>
 </div>
 
+</div><!-- /.sl-grid -->
+
 <!-- ================================================================
      FUNKTION 3 – AUTOMATISCHER REBOOT
      ================================================================ -->
@@ -316,6 +321,7 @@ render_header('app_settings');
             <p class="sl-hint">Alle ausgewählten Tage nutzen dieselbe Uhrzeit und Frequenz (unten) – jeder Tag
                 zählt seine eigenen Vorkommen aber unabhängig.</p>
         </div>
+        <div class="sl-subgrid sl-subgrid-tight">
         <div class="sl-field">
             <label for="f3_time">Uhrzeit</label>
             <input type="time" id="f3_time" name="f3_time" value="<?= cv('SCHEDULED_REBOOT','TIME','04:00') ?>">
@@ -329,10 +335,11 @@ render_header('app_settings');
                 <option value="<?= $n ?>" <?= $cur_every_n === $n ? 'selected' : '' ?>>Nur alle <?= $n ?>x</option>
 <?php endfor; ?>
             </select>
-            <p class="sl-hint">Gilt gemeinsam für alle ausgewählten Wochentage, aber jeder Wochentag zählt für
-                sich: bei "alle 2x" und Auswahl Mo+Do wird z.B. jeder 2. Montag <b>und</b> jeder 2. Donnerstag
-                übersprungen – unabhängig voneinander.</p>
         </div>
+        </div>
+        <p class="sl-hint">Gilt gemeinsam für alle ausgewählten Wochentage, aber jeder Wochentag zählt für
+            sich: bei "alle 2x" und Auswahl Mo+Do wird z.B. jeder 2. Montag <b>und</b> jeder 2. Donnerstag
+            übersprungen – unabhängig voneinander.</p>
     </div>
 </div>
 
@@ -366,17 +373,19 @@ render_header('app_settings');
                 Funktion 1, da ein MQTT-Ausfall schneller auffallen soll.</p>
         </div>
         <hr>
+        <div class="sl-subgrid sl-subgrid-tight">
         <div class="sl-field">
             <label for="f4_mosquitto_service">Mosquitto – Dienstname (systemd)</label>
             <input type="text" id="f4_mosquitto_service" name="f4_mosquitto_service" value="<?= cv('MQTT_WATCHDOG','MOSQUITTO_SERVICE','mosquitto') ?>">
         </div>
         <div class="sl-field">
-            <label for="f4_mosquitto_host">Broker-Adresse für TCP-Check</label>
+            <label for="f4_mosquitto_host">Broker-Adresse (TCP-Check)</label>
             <input type="text" id="f4_mosquitto_host" name="f4_mosquitto_host" value="<?= cv('MQTT_WATCHDOG','MOSQUITTO_HOST','127.0.0.1') ?>">
         </div>
         <div class="sl-field">
-            <label for="f4_mosquitto_port">Broker-Port für TCP-Check</label>
+            <label for="f4_mosquitto_port">Broker-Port</label>
             <input type="number" id="f4_mosquitto_port" name="f4_mosquitto_port" value="<?= cv('MQTT_WATCHDOG','MOSQUITTO_PORT','1883') ?>">
+        </div>
         </div>
         <div class="sl-field">
             <div class="sl-toggle-wrap">
@@ -398,24 +407,21 @@ render_header('app_settings');
             </div>
         </div>
         <hr>
+        <div class="sl-subgrid">
         <div class="sl-field">
             <label for="f4_gateway_pattern">MQTT-Gateway – Prozess-Suchmuster (pgrep -f)</label>
             <input type="text" id="f4_gateway_pattern" name="f4_gateway_pattern" value="<?= cv('MQTT_WATCHDOG','GATEWAY_PROCESS_PATTERN','mqttgateway.pl') ?>">
-            <p class="sl-hint">Das LoxBerry MQTT-Gateway (<code>mqttgateway.pl</code>) ist kein
-                systemd-Dienst, sondern ein LoxBerry-Kern-Daemon – die Erkennung läuft daher über
-                einen Prozess-Suchmuster-Abgleich statt über <code>systemctl</code>.</p>
+            <p class="sl-hint">Das Gateway (<code>mqttgateway.pl</code>) ist kein systemd-Dienst, sondern ein
+                LoxBerry-Kern-Daemon – Erkennung über Prozess-Suchmuster statt <code>systemctl</code>.</p>
         </div>
         <div class="sl-field">
             <label for="f4_gateway_mqtt_prefix">MQTT-Gateway – Status-Topic-Präfix</label>
             <input type="text" id="f4_gateway_mqtt_prefix" name="f4_gateway_mqtt_prefix" value="<?= cv('MQTT_WATCHDOG','GATEWAY_MQTT_PREFIX',$gw_mqtt_prefix_default) ?>">
-            <p class="sl-hint">Das Gateway veröffentlicht seinen eigenen Verbindungsstatus unter
-                <code>&lt;Präfix&gt;/status</code> (z.B. "Connected") und einen Herzschlag unter
-                <code>&lt;Präfix&gt;/keepaliveepoch</code> – sichtbar in Loxone Config als MQTT
-                Virtual Input z.B. <code>&lt;hostname&gt;_mqttgateway_status</code>. Standardmäßig
-                automatisch aus dem aktuellen System-Hostnamen dieses Geräts ermittelt (<b><?= h(gethostname() ?: '?') ?>/mqttgateway</b>)
-                – nur ändern falls dieses Gerät nachweislich abweicht (per <code>mosquitto_sub -h
-                localhost -t '&lt;Präfix&gt;/#' -v</code> per SSH prüfbar). Wird für die Anzeige
-                "Verbindung zu Mosquitto" im Status-Tab genutzt (rein informativ).</p>
+            <p class="sl-hint">Standardmäßig automatisch aus dem System-Hostnamen ermittelt
+                (<b><?= h(gethostname() ?: '?') ?>/mqttgateway</b>) – nur ändern falls dieses Gerät
+                nachweislich abweicht (per <code>mosquitto_sub -h localhost -t '&lt;Präfix&gt;/#' -v</code>
+                per SSH prüfbar).</p>
+        </div>
         </div>
         <div class="sl-field">
             <div class="sl-toggle-wrap">
@@ -474,6 +480,7 @@ render_header('app_settings');
                 </label>
                 <span class="sl-toggle-label">💾 Speicherplatz überwachen</span>
             </div>
+            <div class="sl-subgrid sl-subgrid-tight">
             <div class="sl-slider-row">
                 <label>Warnung ab <span class="sl-slider-val" id="sf5dw"><?= cv('SYSTEM_DIAGNOSTICS','DISK_WARN_PERCENT','85') ?></span> %</label>
                 <input type="range" name="f5_disk_warn" min="50" max="99" step="1"
@@ -485,6 +492,7 @@ render_header('app_settings');
                 <input type="range" name="f5_disk_crit" min="50" max="100" step="1"
                        value="<?= cv('SYSTEM_DIAGNOSTICS','DISK_CRIT_PERCENT','95') ?>"
                        oninput="document.getElementById('sf5dc').textContent=this.value">
+            </div>
             </div>
             <p class="sl-hint">Kein Auto-Heal (ein Neustart macht Speicherplatz nicht frei) – reine Frühwarnung
                 bevor die SD-Karte vollläuft.</p>
@@ -515,6 +523,7 @@ render_header('app_settings');
                 </label>
                 <span class="sl-toggle-label">🌡️ CPU-Temperatur überwachen</span>
             </div>
+            <div class="sl-subgrid sl-subgrid-tight">
             <div class="sl-slider-row">
                 <label>Warnung ab <span class="sl-slider-val" id="sf5tw"><?= cv('SYSTEM_DIAGNOSTICS','TEMP_WARN_C','70') ?></span> °C</label>
                 <input type="range" name="f5_temp_warn" min="40" max="100" step="1"
@@ -526,6 +535,7 @@ render_header('app_settings');
                 <input type="range" name="f5_temp_crit" min="40" max="120" step="1"
                        value="<?= cv('SYSTEM_DIAGNOSTICS','TEMP_CRIT_C','80') ?>"
                        oninput="document.getElementById('sf5tc').textContent=this.value">
+            </div>
             </div>
             <p class="sl-hint">Kein Auto-Heal – nur auf Geräten mit lesbarer Temperatursensorik (z.B. Raspberry
                 Pi) verfügbar, sonst "nicht ermittelbar".</p>
@@ -546,6 +556,7 @@ render_header('app_settings');
                 </label>
                 <span class="sl-toggle-label">Netzwerk bei Ausfall automatisch neu starten</span>
             </div>
+            <div class="sl-subgrid sl-subgrid-tight">
             <div class="sl-field">
                 <label for="f5_internet_host">Prüfziel Host</label>
                 <input type="text" id="f5_internet_host" name="f5_internet_host" value="<?= cv('SYSTEM_DIAGNOSTICS','INTERNET_HOST','1.1.1.1') ?>">
@@ -553,6 +564,7 @@ render_header('app_settings');
             <div class="sl-field">
                 <label for="f5_internet_port">Prüfziel Port</label>
                 <input type="number" id="f5_internet_port" name="f5_internet_port" value="<?= cv('SYSTEM_DIAGNOSTICS','INTERNET_PORT','53') ?>">
+            </div>
             </div>
             <div class="sl-slider-row">
                 <label>Erst neu starten wenn durchgehend nicht erreichbar seit <span class="sl-slider-val" id="sf5iu"><?= cv('SYSTEM_DIAGNOSTICS','INTERNET_UNHEALTHY_MIN','3') ?></span> min</label>
@@ -585,6 +597,7 @@ render_header('app_settings');
                 <label for="f5_time_ntp_server">NTP-Server für den Zeit-Abgleich</label>
                 <input type="text" id="f5_time_ntp_server" name="f5_time_ntp_server" value="<?= cv('SYSTEM_DIAGNOSTICS','TIME_NTP_SERVER','pool.ntp.org') ?>">
             </div>
+            <div class="sl-subgrid sl-subgrid-tight">
             <div class="sl-slider-row">
                 <label>Als Abweichung zählen ab <span class="sl-slider-val" id="sf5td"><?= cv('SYSTEM_DIAGNOSTICS','TIME_MAX_DRIFT_S','60') ?></span> s</label>
                 <input type="range" name="f5_time_max_drift" min="5" max="600" step="5"
@@ -596,6 +609,7 @@ render_header('app_settings');
                 <input type="range" name="f5_time_unsynced_min" min="1" max="60" step="1"
                        value="<?= cv('SYSTEM_DIAGNOSTICS','TIME_UNSYNCED_MIN','10') ?>"
                        oninput="document.getElementById('sf5tu').textContent=this.value">
+            </div>
             </div>
             <p class="sl-hint">Fragt den oben angegebenen NTP-Server DIREKT per UDP ab und vergleicht die
                 Antwort mit der lokalen Systemzeit (eigene, minimale SNTP-Abfrage – funktioniert
@@ -669,6 +683,7 @@ render_header('app_settings');
             </div>
         </div>
         <div id="mqtt_manual" <?= $use_lb ? 'style="display:none"' : '' ?>>
+            <div class="sl-subgrid sl-subgrid-tight">
             <div class="sl-field">
                 <label for="broker">Broker IP / Hostname</label>
                 <input type="text" id="broker" name="broker" value="<?= cv('MQTT','BROKER','127.0.0.1') ?>">
@@ -677,6 +692,8 @@ render_header('app_settings');
                 <label for="port">Port</label>
                 <input type="number" id="port" name="port" value="<?= cv('MQTT','PORT','1883') ?>">
             </div>
+            </div>
+            <div class="sl-subgrid sl-subgrid-tight">
             <div class="sl-field">
                 <label for="mqtt_user">Benutzername (optional)</label>
                 <input type="text" id="mqtt_user" name="mqtt_user" value="<?= cv('MQTT','USER','') ?>">
@@ -684,6 +701,7 @@ render_header('app_settings');
             <div class="sl-field">
                 <label for="mqtt_pass">Passwort (optional)</label>
                 <input type="password" id="mqtt_pass" name="mqtt_pass" value="<?= cv('MQTT','PASS','') ?>">
+            </div>
             </div>
         </div>
         <div class="sl-field">

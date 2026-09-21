@@ -64,7 +64,31 @@ body.sl-embed {
 .sl-tab.active { color: var(--amber); border-bottom-color: var(--amber); }
 
 /* ── Main content area ── */
-.sl-main { padding: 1rem; max-width: 900px; margin: 0 auto; }
+.sl-main { padding: 1rem; max-width: 1200px; margin: 0 auto; }
+
+/* ── Karten-Grid: ordnet mehrere .sl-card nebeneinander an (Status-Übersichtskarten) statt
+   endlos untereinander – Spaltenzahl passt sich automatisch an die verfügbare Breite an
+   (schrumpft auf 1 Spalte auf schmalen Bildschirmen/iframes). align-items:start verhindert
+   dass Karten unterschiedlicher Höhe sich gegenseitig strecken. ── */
+.sl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 0.9rem;
+  align-items: start;
+  margin-bottom: 0.9rem;
+}
+.sl-grid.sl-grid-wide { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
+.sl-grid > .sl-card { margin-bottom: 0; }
+
+/* ── Sub-Grid: ordnet Inhalte INNERHALB einer Karte nebeneinander an (z.B. Mosquitto/Gateway,
+   oder mehrere kurze Diagnose-Checks, oder mehrere Formularfelder einer Zeile). ── */
+.sl-subgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0 1.5rem;
+}
+.sl-subgrid.sl-subgrid-tight { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0 1rem; }
+.sl-subgrid > .sl-section-title { margin-top: 0; }
 
 /* ── Cards ── */
 .sl-card {

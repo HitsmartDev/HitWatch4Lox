@@ -1,12 +1,13 @@
 ## 📌 Projekt-Status
-- **Version:** 2.0 (2026-09-21: Nach v1.4–v1.9 (fünf Runden Zeit-Sync-Diagnose) grundlegende
-  Neuarchitektur auf Nutzerwunsch: "Unser Plugin sollte ja einfach die Uhrzeit mit einem
-  Timeserver vergleichen". `check_time_sync()` fragt jetzt einen NTP-Server DIREKT per eigener
-  minimaler SNTP-Implementierung ab (nur `socket`/`struct`, ein UDP-Paket an Port 123) statt
-  `timedatectl`/`systemd-timesyncd`/`chrony` zu interpretieren – macht die Prüfung komplett
-  unabhängig davon welcher (falls überhaupt ein) NTP-Mechanismus auf dem jeweiligen LoxBerry
-  läuft. Löst damit die gesamte "Container vs. physische Hardware"-Debatte aus v1.8/v1.9
-  ersatzlos auf. Auto-Heal setzt die Zeit jetzt direkt per `ntpdate -u <Server>`.)
+- **Version:** 2.1 (2026-09-21: Reines UI-Release auf Nutzerwunsch – Status- und
+  Einstellungsseite waren nach 5 Funktionen sehr lang geworden ("ewig scrollen"). Neue CSS-
+  Grid-Bausteine `.sl-grid` (mehrere Karten nebeneinander) und `.sl-subgrid`/`-tight` (Felder
+  innerhalb einer Karte nebeneinander) – beide kollabieren automatisch auf 1 Spalte bei wenig
+  Platz, keine Breakpoint-Handarbeit nötig (`grid-template-columns: repeat(auto-fit,
+  minmax(...))`). Status-Tab: 4 Übersichtskarten in einem Grid, MQTT/System-Diagnose in einer
+  zweiten (breiteren) Grid-Zeile, Mosquitto/Gateway sowie Diagnose-Checks intern nebeneinander.
+  Einstellungen: Funktion 1+2 nebeneinander, zusammengehörige Felder (Warnung/Kritisch, Host/
+  Port, etc.) innerhalb jeder Karte nebeneinander. Keine funktionalen Änderungen, nur Layout.)
   Zeit-Sync meldete "nicht synchronisiert" obwohl die Uhrzeit nachweislich korrekt war. Per SSH
   bestätigt: `timedatectl status` zeigt "NTP service: n/a", `systemd-timesyncd`/`chrony`/`ntp`
   allesamt inaktiv – auf diesem (vermutlich LXC-Container-) Gerät läuft GAR KEIN NTP-Client, die
@@ -346,6 +347,34 @@
   6. Status-Tab zeigt jetzt den exakten Offset in Sekunden (`+2.3s`/`-15.1s`) statt nur
      synchron/nicht synchron, plus den verwendeten NTP-Server. Neues MQTT-Topic
      `diag/time_offset_s`.
+- **v2.1 – Kompakteres Layout (auf Nutzerwunsch, reines UI-Release):** "bitte die Startseite ...
+  alles etwas kompakter darstellen und vielleicht nebeneinander ... überleg dir was am besten
+  aussieht". Design-Entscheidung: statt fester Spaltenzahlen (2er/3er-Breakpoints per Hand)
+  `display:grid; grid-template-columns: repeat(auto-fit, minmax(Xpx, 1fr))` – der Browser
+  entscheidet selbst wie viele Spalten reinpassen, kollabiert automatisch auf 1 Spalte in
+  schmalen iframes/Bildschirmen ohne eigene Media Queries. Zwei neue CSS-Klassen in
+  `assets/style.css`:
+  1. `.sl-grid` (300px-Minimum je Karte) – für ganze `.sl-card`-Elemente nebeneinander.
+     `.sl-grid-wide` (380px-Minimum) für inhaltsreichere Karten (MQTT/System-Diagnose).
+     `align-items:start` verhindert dass unterschiedlich hohe Karten sich gegenseitig strecken.
+  2. `.sl-subgrid` (200px-Minimum) / `.sl-subgrid-tight` (140px-Minimum) – für Inhalte
+     INNERHALB einer Karte nebeneinander (z.B. zwei Slider, zwei Textfelder).
+  3. `app_status.php`: Netbird-Status/Watchdog-Aktionen/Letzte Aktionen/Funktionen-Übersicht
+     (Funktionen-Übersicht dafür nach oben verschoben, vorher nach MQTT/System-Diagnose) in
+     einem `.sl-grid`. MQTT-Dienste-Status + System-Diagnose (beide oft leer wenn F4/F5 aus,
+     daher nur gerendert wenn mindestens eine aktiv ist) in einer zweiten `.sl-grid-wide`-Zeile.
+     Mosquitto/Gateway nebeneinander via `.sl-subgrid`; Speicher/RAM/Temperatur nebeneinander via
+     `.sl-subgrid-tight`; Internet/Zeit nebeneinander via `.sl-subgrid`.
+  4. `app_settings.php`: Funktion 1+2 in einem `.sl-grid` (F2 hängt fachlich von F1 ab, ähnliche
+     Höhe – andere Funktionskarten bewusst NICHT gepaart, da z.B. Funktion 5 sehr viel länger
+     ist als Funktion 2 und ein Nebeneinander dort nur hässliche Lücken erzeugen würde).
+     Zusammengehörige Felder innerhalb JEDER Karte kompaktiert: Prüfintervall+Wartezeit (F1),
+     Uhrzeit+Frequenz (F3), Dienstname+Host+Port (F4 Mosquitto), Suchmuster+Präfix (F4 Gateway),
+     Warnung+Kritisch (F5 Speicher/Temperatur), Host+Port (F5 Internet), Drift+Grace-Schwelle
+     (F5 Zeit), Broker+Port sowie Benutzername+Passwort (MQTT-Broker-Karte).
+  5. `.sl-main`-Breite von 900px auf 1200px erhöht (nur wirksam wenn der Container/iframe
+     tatsächlich so breit ist – `auto-fit` reduziert die Spaltenzahl automatisch bei weniger
+     Platz, daher keine Verschlechterung auf schmalen Ansichten).
 - **Noch offen:**
   - [ ] Die neuen Schwellwerte (F1/F4-Mosquitto/F4-Gateway/F5-Internet/F5-Services) sind wie
     Funktion 5 insgesamt nur isoliert getestet (Funktionsebene, `_unhealthy_elapsed_min()` per
@@ -567,7 +596,7 @@ nötig (kein Standort erforderlich) – `ajax.php` daher deutlich schlanker als 
 
 | Datei | Zweck |
 |---|---|
-| `app_status.php` | Health-Ampel-Banner (seit v1.1, ganz oben), Daemon-Controls, Netbird-Status, Watchdog-Aktionen, **Letzte Aktionen** (letzte 8 aus `action_log`), Cooldown-Anzeige, MQTT-Dienste-Status (Funktion 4, mit Gateway↔Broker-Link), **System-Diagnose** (Funktion 5, seit v1.1), Funktionen-Übersicht |
+| `app_status.php` | Health-Ampel-Banner (ganz oben), Daemon-Controls, dann **seit v2.1 im `.sl-grid`-Layout nebeneinander**: Netbird-Status, Watchdog-Aktionen, Letzte Aktionen (aus `action_log`), Funktionen-Übersicht – darunter in einer zweiten `.sl-grid-wide`-Zeile MQTT-Dienste-Status (Funktion 4) + System-Diagnose (Funktion 5), beide mit internem `.sl-subgrid` |
 | `app_settings.php` | F1/F2/F3/F4/F5-Toggles + Parameter, F2-Toggle per JS gesperrt wenn F1 aus, F4-Autorestart-Toggles gesperrt wenn F4 aus, F5: jedes Thema mit eigenem Monitoring-Toggle + (wo sinnvoll) eigenem Auto-Heal-Toggle, F3 Wochentags-Chips (Mehrfachauswahl) + Frequenz-Select, MQTT-Karte |
 | `app_log.php` | **Aktions-Historie** (neu, volle `action_log`-Tabelle bis 200 Einträge) oberhalb der bisherigen Log-Session-Liste |
 | `app_help.php` | Die vier Funktionen, Aktions-Historie-Erklärung, Cooldown-/Fangfenster-Erklärung, Sicherheits-/sudoers-Hinweis (inkl. `restart_service`-Ausnahme), MQTT-Referenz, FAQ |
@@ -581,6 +610,10 @@ Aktionstyp – gemeinsam genutzt von `app_status.php` (Kurzliste) und `app_log.p
 
 ## 📋 Versionshistorie
 
+- **v2.1 (2026-09-21):** Status- und Einstellungsseite kompakter – neue CSS-Grid-Bausteine
+  `.sl-grid`/`.sl-subgrid` (`auto-fit`+`minmax`, automatische Spaltenzahl, kein fester
+  Breakpoint) ordnen Übersichtskarten und zusammengehörige Formularfelder nebeneinander an
+  statt in einer langen vertikalen Liste. Rein layoutbezogen, keine funktionalen Änderungen.
 - **v2.0 (2026-09-21):** Zeit-Synchronisation grundlegend neu gebaut – statt `timedatectl`/
   `systemd-timesyncd`/`chrony` zu interpretieren (5 Diagnose-Runden zeigten: unzuverlässig auf
   LoxBerry), fragt der Daemon jetzt einen NTP-Server DIREKT per eigener minimaler SNTP-Abfrage
